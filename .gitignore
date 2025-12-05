@@ -1,0 +1,13 @@
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Environments
+.env
+
+# PostgreSQL
+pgdata*/
+postgres-data/

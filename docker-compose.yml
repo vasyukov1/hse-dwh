@@ -1,0 +1,21 @@
+services:
+  postgres-master:
+    container_name: postgres-master
+    image: postgres:latest
+    restart: unless-stopped   # Dev-version. Change to 'always' for prod
+    ports:
+      - "5432:5432"
+    env_file: .env
+    volumes:
+      - postgres-master-data:/var/lib/postgresql
+    networks:
+      - postgres-network
+
+
+volumes:
+  postgres-master-data:
+
+
+networks:
+  postgres-network:
+    driver: bridge
