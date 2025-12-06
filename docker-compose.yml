@@ -1,19 +1,23 @@
 services:
   postgres-master:
     container_name: postgres-master
-    image: postgres:latest
-    restart: unless-stopped   # Dev-version. Change to 'always' for prod
+    image: postgres:17
+    restart: always
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "${POSTGRES_MASTER_PORT}:5432"
     env_file: .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_MASTER_PORT: ${POSTGRES_MASTER_PORT}
     volumes:
-      - postgres-master-data:/var/lib/postgresql
-      - ./migrations:/docker-entrypoint-initdb.d:ro
+      - ./postgres-master-data:/var/lib/postgresql/data                             # data
+      - ./postgres-replica-data:/var/lib/postgresql/postgres-replica-data           # replica
+      - ./migrations:/docker-entrypoint-initdb.d:ro                                 # migrations
+      - ./init-script:/etc/postgresql/init-script                                   # init
+      - ./init-script/common-config/postgresql.conf:/etc/postgresql/postgresql.conf # config
+      - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf         # access
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -23,9 +27,23 @@ services:
     networks:
       - postgres-network
 
-
-volumes:
-  postgres-master-data:
+  postgres-replica:
+    container_name: postgres-replica
+    image: postgres:17
+    restart: always
+    ports:
+      - "${POSTGRES_REPLICA_PORT}:5432"
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_REPLICA_PORT: ${POSTGRES_REPLICA_PORT}
+    volumes:
+      - ./postgres-replica-data:/var/lib/postgresql/data                            # data
+      - ./init-script/common-config/postgresql.conf:/etc/postgresql/postgresql.conf # config
+      - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf         # access
+    networks:
+      - postgres-network
 
 
 networks:

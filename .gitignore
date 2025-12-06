@@ -11,3 +11,5 @@
 # PostgreSQL
 pgdata*/
 postgres-data/
+postgres-master-data/
+postgres-replica-data/

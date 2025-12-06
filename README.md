@@ -13,6 +13,8 @@ This project sets up a foundational DWH environment with PostgreSQL, including l
 
 All databases reside on a single PostgreSQL instance with schema separation.
 
+The solution includes a master-replica setup with automatic initialization and replication configuration. The code is taken from [seminar](https://github.com/mgcrp/hse_se_dwh_course_2025/tree/master/week02/sem/demo2_automated_replication).
+
 ---
 
 ## Database Architecture
@@ -49,33 +51,81 @@ docker exec -it postgres-master psql -U <postgres_user> -d <db_name> -c "\dt"
 ✅ **Step 2**: Automated database initialization.  
 ✅ **Step 3**: Schema migration and tables creation.  
 ✅ **Step 4**: Health monitoring setup.  
+✅ **Step 5**: PostgreSQL replication setup.  
 
 ---
 
 ## Project Structure
 ```
 hse-dwh/
-├── migrations/ 
-│   ├── 000_create_databases.sql
-│   ├── 001_user_service_db.sql
-│   ├── 002_order_service_db.sql
-│   └── 003_logistics_service_db.sql
-├── .env.example
-├── .gitignore
-├── docker-compose.yml
-└── README.md
+├── init-script/                            # Replication initialization scripts
+│   ├── bash/
+│   │   ├── 0001-create-replica-user.sh     # Create replication user
+│   │   ├── 0002-backup-master.sh           # Backup master database
+│   │   └── 0003-init-slave.sh              # Initialize replica from backup
+│   ├── common-config/
+│   │   ├── pg_hba.conf                     # Host-based authentication
+│   │   └── postgrresql.conf                # Master configuration
+│   ├── replica-config/
+│   │   └── postgrresql.auto.conf           # Replica configuration
+│   └── init.sh                             # Main initialization script
+├── migrations/                             # Database schema migrations
+│   ├── 000_create_databases.sql            # Create three databases
+│   ├── 001_user_service_db.sql             # User service tables
+│   ├── 002_order_service_db.sql            # Order service tables
+│   └── 003_logistics_service_db.sql        # Logistics service tables
+├── .env.example                            # Environment variables template
+├── .gitignore                              # Git exclusion rules
+├── check_replication.sh                    # Replication status verification
+├── docker-compose.yml                      # Docker services definition
+├── docker-init.sh                          # Complete initialization script
+├── README.md                               # Documentation
+└── src_database_diagram.mmd                # Database diagram source
 ```
 
 ---
 
 ## How to Run
 
-0. **Copy environment variables**:
+### Quick Start
+
+Make the initialization script executable and run it:
 ```bash
-cp .env.example .env
+chmod +x docker-init.sh
+./docker-init.sh
 ```
 
-1. **Start the PostgreSQL instance:**
-```bash
-docker compose up
-```
+This script performs:
+1. Create .env if it doesn't exist
+2. Cleans up volumes
+3. Stops and removes existing containers
+4. Start master
+5. Prepare replica config
+6. Restart master
+7. Start replica
+
+### Manual Setup
+
+1. **Environment Setup**:
+    ```bash
+    cp .env.example .env
+    ```
+
+2. **Start Services**:
+    ```bash
+    docker compose up -d
+
+    chmod +x docker-init.sh
+    ./docker-init.sh
+    ```
+
+3. **Check if containers are running**:
+    ```bash
+    docker compose ps
+    ```
+
+4. **Check replication status**:
+    ```bash
+    chmod +x check_replication.sh
+    ./check_replication.sh
+    ```
