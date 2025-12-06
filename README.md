@@ -46,6 +46,15 @@ docker exec -it postgres-master psql -U <postgres_user> -d <db_name> -c "\dt"
 
 ---
 
+## Connection Strings
+
+- Master Node: `postgresql://postgres:postgres@localhost:5432/postgres`
+- Replica Node: `postgresql://postgres:postgres@localhost:5433/postgres`
+- User Service DB: `postgresql://postgres:postgres@localhost:5432/user_service_db`
+- Order Service DB: `postgresql://postgres:postgres@localhost:5432/order_service_db`
+- Logistics Service DB: `postgresql://postgres:postgres@localhost:5432/logistics_service_db`
+---
+
 ## Completed tasks
 ✅ **Step 1**: Set up PostgreSQL instance in Docker Compose.  
 ✅ **Step 2**: Automated database initialization.  

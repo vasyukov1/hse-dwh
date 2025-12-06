@@ -13,3 +13,7 @@ pgdata*/
 postgres-data/
 postgres-master-data/
 postgres-replica-data/
+
+# Test data
+test_data/
+load_test_data.sh

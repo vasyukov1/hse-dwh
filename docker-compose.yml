@@ -40,7 +40,6 @@ services:
       POSTGRES_REPLICA_PORT: ${POSTGRES_REPLICA_PORT}
     volumes:
       - ./postgres-replica-data:/var/lib/postgresql/data                            # data
-      - ./init-script/common-config/postgresql.conf:/etc/postgresql/postgresql.conf # config
       - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf         # access
     networks:
       - postgres-network
