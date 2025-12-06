@@ -15,6 +15,8 @@ All databases reside on a single PostgreSQL instance with schema separation.
 
 The solution includes a master-replica setup with automatic initialization and replication configuration. The code is taken from [seminar](https://github.com/mgcrp/hse_se_dwh_course_2025/tree/master/week02/sem/demo2_automated_replication).
 
+Implemented 6-month customer cohort analysis tracking retention rates, total revenue, and average revenue per customer from their first purchase month.
+
 ---
 
 ## Database Architecture
@@ -61,12 +63,16 @@ docker exec -it postgres-master psql -U <postgres_user> -d <db_name> -c "\dt"
 ✅ **Step 3**: Schema migration and tables creation.  
 ✅ **Step 4**: Health monitoring setup.  
 ✅ **Step 5**: PostgreSQL replication setup.  
+✅ **Step 6**: Implemented Cohort Analysis.  
 
 ---
 
 ## Project Structure
 ```
 hse-dwh/
+├── cohort_analysis/
+│   ├── cohort_analysis_view.sql            # Cohort analysis view
+│   ├── cohort_analysis.sql                 # Cohort analysis
 ├── init-script/                            # Replication initialization scripts
 │   ├── bash/
 │   │   ├── 0001-create-replica-user.sh     # Create replication user
@@ -95,6 +101,12 @@ hse-dwh/
 ---
 
 ## How to Run
+
+Clone this repository:
+```bash
+git clone https://github.com/vasyukov1/hse-dwh
+cd hse-dwh
+```
 
 ### Quick Start
 
@@ -138,3 +150,22 @@ This script performs:
     chmod +x check_replication.sh
     ./check_replication.sh
     ```
+
+---
+
+## Cohort Analysis
+
+Run cohort analysis and view results:
+```bash
+docker exec -i postgres-master psql -U postgres -d order_service_db < cohort_analysis/cohort_analysis.sql
+```
+
+Run cohort analysis view:
+```bash
+docker exec -i postgres-master psql -U postgres -d order_service_db < cohort_analysis/cohort_analysis_view.sql
+```
+
+Watch cohort analysis results:
+```bash
+docker exec postgres-master psql -U postgres -d order_service_db -c "SELECT * FROM cohort_analysis_view;"
+```
