@@ -151,6 +151,11 @@ This script performs:
     ./check_replication.sh
     ```
 
+5. **Register Debezium Connectors**:
+    ```bash
+    chmod +x debezium/register-connectors.sh
+    ```
+
 ---
 
 ## Cohort Analysis
