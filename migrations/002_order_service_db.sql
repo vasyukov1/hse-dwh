@@ -1,7 +1,7 @@
 \connect order_service_db
 SET search_path = public;
 
-CREATE TABLE products (
+CREATE TABLE IF NOT EXISTS products (
     product_id              SERIAL      PRIMARY KEY,
     product_sku             VARCHAR     NOT NULL UNIQUE, -- Business Key
     
@@ -31,7 +31,7 @@ CREATE TABLE products (
     updated_by              VARCHAR
 );
 
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
     order_id                        SERIAL      PRIMARY KEY,
     order_external_id               UUID        NOT NULL UNIQUE, -- Business Key
     user_external_id                UUID        NOT NULL, -- Business Key
@@ -71,7 +71,7 @@ CREATE TABLE orders (
     updated_by                      VARCHAR
 );
 
-CREATE TABLE order_items (
+CREATE TABLE IF NOT EXISTS order_items (
     order_item_id               SERIAL      PRIMARY KEY,
     order_external_id           UUID        NOT NULL, -- Business Key
     product_sku                 VARCHAR     NOT NULL, -- Business Key
@@ -102,7 +102,7 @@ CREATE TABLE order_items (
         REFERENCES products(product_sku)
 );
 
-CREATE TABLE order_status_history (
+CREATE TABLE IF NOT EXISTS order_status_history (
     history_id          SERIAL      PRIMARY KEY,
     order_external_id   UUID        NOT NULL, -- Business Key
     

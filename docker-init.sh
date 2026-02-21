@@ -37,6 +37,19 @@ echo "Waiting for master to start..."
 for i in {1..30}; do
     if docker exec postgres-master pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
         echo "Master is ready!"
+        echo "Waiting for PostgreSQL to accept queries..."
+        for j in {1..30}; do
+            if docker exec postgres-master psql -U "$POSTGRES_USER" -d postgres -c "SELECT 1" >/dev/null 2>&1; then
+                echo "PostgreSQL is accepting queries."
+                break
+            fi
+            sleep 2
+            if [ $j -eq 30 ]; then
+                echo "ERROR: PostgreSQL did not accept queries within 60 seconds"
+                docker logs postgres-master --tail 50
+                exit 1
+            fi
+        done
         break
     fi
     sleep 2
@@ -48,21 +61,24 @@ done
 
 
 # Create DBs, role and publications
-echo "Creating DBs, role and publications..."
-
-# Function of creation DB, if not exists
+echo "Creating databases if they don't exist..."
 create_db_if_not_exists() {
-  local db_name=$1
-  local db_exists=$(docker exec -i postgres-master psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$db_name'")
-  if [ "$db_exists" != "1" ]; then
-    docker exec -i postgres-master psql -U postgres -c "CREATE DATABASE $db_name;"
-  fi
+    local db_name=$1
+    local exists=$(docker exec postgres-master psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$db_name'")
+    if [ "$exists" != "1" ]; then
+        docker exec postgres-master psql -U postgres -c "CREATE DATABASE $db_name"
+        echo "Database $db_name created"
+    else
+        echo "Database $db_name already exists"
+    fi
 }
 
 create_db_if_not_exists "user_service_db"
 create_db_if_not_exists "order_service_db"
 create_db_if_not_exists "logistics_service_db"
 
+
+# Create replication user
 docker exec -i postgres-master psql -U postgres -d postgres <<'SQL'
 DO $$
 BEGIN
@@ -74,21 +90,41 @@ END$$;
 SQL
 
 
+# Create tables in each service database 
+echo "Creating tables in service databases..."
+
+apply_sql_file() {
+    local db_name=$1
+    local sql_file=$2
+    if [ -f "$sql_file" ]; then
+        echo "Applying $sql_file to $db_name"
+        docker exec -i postgres-master psql -U postgres -d "$db_name" < "$sql_file"
+    else
+        echo "WARNING: SQL file $sql_file not found, skipping $db_name"
+    fi
+}
+
+echo "Creating tables in service databases..."
+apply_sql_file "user_service_db" "./migrations/001_user_service_db.sql"
+apply_sql_file "order_service_db" "./migrations/002_order_service_db.sql"
+apply_sql_file "logistics_service_db" "./migrations/003_logistics_service_db.sql"
+
+
 # Create publications
-echo "Creating publications (if missing)..."
+echo "Creating publications..."
 
 create_publication_if_not_exists() {
-  local db_name=$1
-  local pub_name=$2
-  local tables=$3
-  
-  local pub_exists=$(docker exec -i postgres-master psql -U postgres -d "$db_name" -tAc "SELECT 1 FROM pg_publication WHERE pubname='$pub_name'")
-  if [ "$pub_exists" != "1" ]; then
-    docker exec -i postgres-master psql -U postgres -d "$db_name" -c "CREATE PUBLICATION $pub_name FOR TABLE $tables;"
-    echo "Publication $pub_name created in $db_name."
-  else
-    echo "Publication $pub_name already exists in $db_name."
-  fi
+    local db_name=$1
+    local pub_name=$2
+    local tables=$3
+
+    local pub_exists=$(docker exec -i postgres-master psql -U postgres -d "$db_name" -tAc "SELECT 1 FROM pg_publication WHERE pubname='$pub_name'")
+    if [ "$pub_exists" != "1" ]; then
+        docker exec -i postgres-master psql -U postgres -d "$db_name" -c "CREATE PUBLICATION $pub_name FOR TABLE $tables;"
+        echo "Publication $pub_name created in $db_name."
+    else
+        echo "Publication $pub_name already exists in $db_name."
+    fi
 }
 
 create_publication_if_not_exists "user_service_db" "dbz_pub_user_service" "public.users, public.user_addresses, public.user_status_history"
@@ -197,6 +233,12 @@ if [ -f ./debezium/register-connectors.sh ]; then
 else
   echo "Skip registration: ./debezium/register-connectors.sh not found. You can register connectors manually or add the script."
 fi
+
+
+# Start DMP service
+echo "Starting DMP Service..."
+docker compose up -d dmp-service
+echo "DMP Service is running"
 
 
 echo "Connection strings:"

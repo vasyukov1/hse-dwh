@@ -1,0 +1,35 @@
+services:
+  user_service:
+    topics:
+      - name: "user_service.public.users"
+        hub:
+          table: "hub_user"
+          business_key: "user_external_id"
+          target_key: "hub_user_id"
+        satellite:
+          table: "sat_user_details"
+          hub_key: "hub_user_id"
+          attributes:
+            - "email"
+            - "first_name"
+            - "last_name"
+            - "phone"
+            - "date_of_birth"
+            - "registration_date"
+            - "status"
+
+  order_service:
+    topics:
+      - name: "order_service.public.orders"
+        hub:
+          table: "hub_order"
+          business_key: "order_external_id"
+          target_key: "hub_order_id"
+        satellite:
+          table: "sat_order_details"
+          hub_key: "hub_order_id"
+          attributes:
+            - "order_number"
+            - "status"
+            - "total_amount"
+            - "currency"

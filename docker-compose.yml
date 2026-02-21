@@ -11,6 +11,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_MASTER_PORT: ${POSTGRES_MASTER_PORT}
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf' -c 'hba_file=/etc/postgresql/pg_hba.conf'
     volumes:
       - ./postgres-master-data:/var/lib/postgresql/data                                 # data
       - ./migrations:/docker-entrypoint-initdb.d:ro                                     # migrations
@@ -37,9 +38,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_REPLICA_PORT: ${POSTGRES_REPLICA_PORT}
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf' -c 'hba_file=/etc/postgresql/pg_hba.conf'
     volumes:
-      - ./postgres-replica-data:/var/lib/postgresql/data                    # data
-      - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf # access
+      - ./postgres-replica-data:/var/lib/postgresql/data                                # data
+      - ./init-script/common-config/postgresql.conf:/etc/postgresql/postgresql.conf:ro  # config
+      - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf             # access
     networks:
       - postgres-network
 
@@ -115,6 +118,23 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
 
       CONNECT_REST_ADVERTISED_HOST_NAME: "debezium"
+    networks:
+      - postgres-network
+
+  dmp-service:
+    build: ./dmp
+    container_name: dmp-service
+    depends_on:
+      - kafka
+      - postgres-dwh
+      - debezium
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DWH_HOST: ${DWH_HOST}
+      DWH_DB: ${POSTGRES_DWH_DB}
+      DWH_USER: ${POSTGRES_USER}
+      DWH_PASSWORD: ${POSTGRES_PASSWORD}
+      KAFKA_BOOTSTRAP: kafka:9092
     networks:
       - postgres-network
 

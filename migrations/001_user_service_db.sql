@@ -1,7 +1,7 @@
 \connect user_service_db
 SET search_path = public;
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     user_id             SERIAL      PRIMARY KEY,
     user_external_id    UUID        NOT NULL UNIQUE, -- Business Key
 
@@ -28,7 +28,7 @@ CREATE TABLE users (
     updated_by          VARCHAR
 );
 
-CREATE TABLE user_addresses (
+CREATE TABLE IF NOT EXISTS user_addresses (
     address_id          SERIAL  PRIMARY KEY,
     address_external_id UUID    NOT NULL UNIQUE, -- Business Key
     user_external_id    UUID    NOT NULL, -- Business Key
@@ -60,7 +60,7 @@ CREATE TABLE user_addresses (
         REFERENCES users(user_external_id)
 );
 
-CREATE TABLE user_status_history (
+CREATE TABLE IF NOT EXISTS user_status_history (
     history_id          SERIAL      PRIMARY KEY,
     user_external_id    UUID        NOT NULL,
     
