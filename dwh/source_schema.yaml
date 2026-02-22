@@ -1,0 +1,256 @@
+tables:
+  # ================= MICROSERVICE: USER_SERVICE =================
+  - name: users
+    source_system: user_service
+    business_key: user_external_id
+    business_key_type: uuid
+    attributes:
+      - {name: email, type: varchar}
+      - {name: first_name, type: varchar}
+      - {name: last_name, type: varchar}
+      - {name: phone, type: varchar}
+      - {name: date_of_birth, type: date}
+      - {name: registration_date, type: timestamp}
+      - {name: status, type: varchar}
+      - {name: effective_from, type: timestamp}
+      - {name: effective_to, type: timestamp}
+      - {name: is_current, type: boolean}
+      - {name: created_at, type: timestamp}
+      - {name: updated_at, type: timestamp}
+      - {name: created_by, type: varchar}
+      - {name: updated_by, type: varchar}
+
+  - name: user_addresses
+    source_system: user_service
+    business_key: address_external_id
+    business_key_type: uuid
+    references:
+      - target: users
+    attributes:
+      - {name: address_type, type: varchar}
+      - {name: country, type: varchar}
+      - {name: region, type: varchar}
+      - {name: city, type: varchar}
+      - {name: street_address, type: varchar}
+      - {name: postal_code, type: varchar}
+      - {name: apartment, type: varchar}
+      - {name: is_default, type: boolean}
+      - {name: effective_from, type: timestamp}
+      - {name: effective_to, type: timestamp}
+      - {name: is_current, type: boolean}
+      - {name: created_at, type: timestamp}
+      - {name: updated_at, type: timestamp}
+      - {name: created_by, type: varchar}
+      - {name: updated_by, type: varchar}
+
+  - name: user_status_history
+    source_system: user_service
+    references:
+      - target: users
+    attributes:
+      - {name: old_status, type: varchar}
+      - {name: new_status, type: varchar}
+      - {name: change_reason, type: varchar}
+      - {name: changed_at, type: timestamp}
+      - {name: changed_by, type: varchar}
+      - {name: session_id, type: varchar}
+      - {name: ip_address, type: inet}
+      - {name: user_agent, type: text}
+
+  # ================= MICROSERVICE: ORDER_SERVICE =================
+  - name: products
+    source_system: order_service
+    business_key: product_sku
+    business_key_type: varchar
+    attributes:
+      - {name: product_name, type: varchar}
+      - {name: category, type: varchar}
+      - {name: brand, type: varchar}
+      - {name: price, type: decimal}
+      - {name: currency, type: varchar}
+      - {name: weight_grams, type: integer}
+      - {name: dimensions_length_cm, type: decimal}
+      - {name: dimensions_width_cm, type: decimal}
+      - {name: dimensions_height_cm, type: decimal}
+      - {name: is_active, type: boolean}
+      - {name: effective_from, type: timestamp}
+      - {name: effective_to, type: timestamp}
+      - {name: is_current, type: boolean}
+      - {name: created_at, type: timestamp}
+      - {name: updated_at, type: timestamp}
+      - {name: created_by, type: varchar}
+      - {name: updated_by, type: varchar}
+
+  - name: orders
+    source_system: order_service
+    business_key: order_external_id
+    business_key_type: uuid
+    references:
+      - target: users
+      - target: user_addresses
+    attributes:
+      - {name: order_number, type: varchar}
+      - {name: order_date, type: timestamp}
+      - {name: status, type: varchar}
+      - {name: subtotal, type: decimal}
+      - {name: tax_amount, type: decimal}
+      - {name: shipping_cost, type: decimal}
+      - {name: discount_amount, type: decimal}
+      - {name: total_amount, type: decimal}
+      - {name: currency, type: varchar}
+      - {name: delivery_type, type: varchar}
+      - {name: expected_delivery_date, type: date}
+      - {name: actual_delivery_date, type: date}
+      - {name: payment_method, type: varchar}
+      - {name: payment_status, type: varchar}
+      - {name: effective_from, type: timestamp}
+      - {name: effective_to, type: timestamp}
+      - {name: is_current, type: boolean}
+      - {name: created_at, type: timestamp}
+      - {name: updated_at, type: timestamp}
+      - {name: created_by, type: varchar}
+      - {name: updated_by, type: varchar}
+
+  - name: order_items
+    source_system: order_service
+    references:
+      - target: orders
+      - target: products
+    attributes:
+      - {name: quantity, type: integer}
+      - {name: unit_price, type: decimal}
+      - {name: total_price, type: decimal}
+      - {name: product_name_snapshot, type: varchar}
+      - {name: product_category_snapshot, type: varchar}
+      - {name: product_brand_snapshot, type: varchar}
+      - {name: created_at, type: timestamp}
+      - {name: updated_at, type: timestamp}
+      - {name: created_by, type: varchar}
+      - {name: updated_by, type: varchar}
+
+  - name: order_status_history
+    source_system: order_service
+    references:
+      - target: orders
+    attributes:
+      - {name: old_status, type: varchar}
+      - {name: new_status, type: varchar}
+      - {name: change_reason, type: varchar}
+      - {name: changed_at, type: timestamp}
+      - {name: changed_by, type: varchar}
+      - {name: session_id, type: varchar}
+      - {name: ip_address, type: inet}
+      - {name: notes, type: text}
+
+  # ================= MICROSERVICE: LOGISTICS_SERVICE =================
+  - name: warehouses
+    source_system: logistics_service
+    business_key: warehouse_code
+    business_key_type: varchar
+    attributes:
+      - {name: warehouse_name, type: varchar}
+      - {name: warehouse_type, type: varchar}
+      - {name: country, type: varchar}
+      - {name: region, type: varchar}
+      - {name: city, type: varchar}
+      - {name: street_address, type: varchar}
+      - {name: postal_code, type: varchar}
+      - {name: is_active, type: boolean}
+      - {name: max_capacity_cubic_meters, type: decimal}
+      - {name: operating_hours, type: varchar}
+      - {name: contact_phone, type: varchar}
+      - {name: manager_name, type: varchar}
+      - {name: effective_from, type: timestamp}
+      - {name: effective_to, type: timestamp}
+      - {name: is_current, type: boolean}
+      - {name: created_at, type: timestamp}
+      - {name: updated_at, type: timestamp}
+      - {name: created_by, type: varchar}
+      - {name: updated_by, type: varchar}
+
+  - name: pickup_points
+    source_system: logistics_service
+    business_key: pickup_point_code
+    business_key_type: varchar
+    attributes:
+      - {name: pickup_point_name, type: varchar}
+      - {name: pickup_point_type, type: varchar}
+      - {name: country, type: varchar}
+      - {name: region, type: varchar}
+      - {name: city, type: varchar}
+      - {name: street_address, type: varchar}
+      - {name: postal_code, type: varchar}
+      - {name: is_active, type: boolean}
+      - {name: max_capacity_packages, type: integer}
+      - {name: operating_hours, type: varchar}
+      - {name: contact_phone, type: varchar}
+      - {name: partner_name, type: varchar}
+      - {name: effective_from, type: timestamp}
+      - {name: effective_to, type: timestamp}
+      - {name: is_current, type: boolean}
+      - {name: created_at, type: timestamp}
+      - {name: updated_at, type: timestamp}
+      - {name: created_by, type: varchar}
+      - {name: updated_by, type: varchar}
+
+  - name: shipments
+    source_system: logistics_service
+    business_key: shipment_external_id
+    business_key_type: uuid
+    references:
+      - target: orders
+      - target: warehouses
+      - target: pickup_points
+      - target: user_addresses
+    attributes:
+      - {name: tracking_number, type: varchar}
+      - {name: status, type: varchar}
+      - {name: weight_grams, type: integer}
+      - {name: volume_cubic_cm, type: integer}
+      - {name: package_count, type: integer}
+      - {name: destination_type, type: varchar}
+      - {name: created_date, type: timestamp}
+      - {name: dispatched_date, type: timestamp}
+      - {name: estimated_delivery_date, type: timestamp}
+      - {name: actual_delivery_date, type: timestamp}
+      - {name: delivery_notes, type: text}
+      - {name: recipient_name, type: varchar}
+      - {name: delivery_signature, type: varchar}
+      - {name: effective_from, type: timestamp}
+      - {name: effective_to, type: timestamp}
+      - {name: is_current, type: boolean}
+      - {name: created_at, type: timestamp}
+      - {name: updated_at, type: timestamp}
+      - {name: created_by, type: varchar}
+      - {name: updated_by, type: varchar}
+
+  - name: shipment_movements
+    source_system: logistics_service
+    references:
+      - target: shipments
+    attributes:
+      - {name: movement_type, type: varchar}
+      - {name: location_type, type: varchar}
+      - {name: location_code, type: varchar}
+      - {name: movement_datetime, type: timestamp}
+      - {name: operator_name, type: varchar}
+      - {name: notes, type: text}
+      - {name: latitude, type: decimal}
+      - {name: longitude, type: decimal}
+      - {name: created_at, type: timestamp}
+      - {name: created_by, type: varchar}
+
+  - name: shipment_status_history
+    source_system: logistics_service
+    references:
+      - target: shipments
+    attributes:
+      - {name: old_status, type: varchar}
+      - {name: new_status, type: varchar}
+      - {name: change_reason, type: varchar}
+      - {name: changed_at, type: timestamp}
+      - {name: changed_by, type: varchar}
+      - {name: location_type, type: varchar}
+      - {name: location_code, type: varchar}
+      - {name: notes, type: text}
+      - {name: customer_notified, type: boolean}
