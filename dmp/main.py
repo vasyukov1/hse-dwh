@@ -5,7 +5,7 @@ import psycopg2
 from kafka import KafkaConsumer
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class DMPService:
@@ -54,41 +54,65 @@ class DMPService:
         
         print(f"Processing data for {topic_config['name']}: {data.get('email')}")
         cursor = self.db_conn.cursor()
+        hub_hash_id = None
 
         # HUB
-        hub_cfg = topic_config['hub']
-        business_key_value = data[hub_cfg['business_key']]
-        hub_hash_id = self.generate_dv_hash(business_key_value)
+        if 'hub' in topic_config:
+            hub_cfg = topic_config['hub']
+            business_key_value = data[hub_cfg['business_key']]
+            hub_hash_id = self.generate_dv_hash(business_key_value)
 
-        cursor.execute(f"""
-            INSERT INTO dwh_detailed.{hub_cfg['table']} ({hub_cfg['target_key']}, {hub_cfg['business_key']}, record_source)
-            VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
-        """, (hub_hash_id, business_key_value, topic_config['name']))
+            cursor.execute(f"""
+                INSERT INTO dwh_detailed.{hub_cfg['table']} ({hub_cfg['target_key']}, {hub_cfg['business_key']}, record_source)
+                VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
+            """, (hub_hash_id, business_key_value, topic_config['name']))
+
+        # LINK
+        if 'links' in topic_config and hub_hash_id:
+            for link_cfg in topic_config['links']:
+                target_bk_val = data.get(link_cfg['target_business_key_field'])
+
+                if target_bk_val:
+                    target_hash = self.generate_dv_hash(target_bk_val)
+                    link_hash = self.generate_dv_hash(hub_hash_id + target_hash)
+
+                    cursor.execute(f"""
+                        INSERT INTO dwh_detailed.{link_cfg['table']}
+                        ({link_cfg['link_key']}, {link_cfg['source_hub_key']}, {link_cfg['target_hub_key']}, record_source)
+                        VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING
+                    """, (link_hash, hub_hash_id, target_hash, topic_config['name']))
 
         # SATELLITE
-        sat_cfg = topic_config['satellite']
+        if 'satellite' in topic_config:
+            sat_cfg = topic_config['satellite']
 
-        processed_values = []
-        for attr in sat_cfg['attributes']:
-            val = data.get(attr)
+            if not hub_hash_id:
+                return
 
-            if isinstance(val, int) and val > 10**12:
-                val = datetime.fromtimestamp(val / 1000000.0)
+            processed_values = []
+            for attr in sat_cfg['attributes']:
+                val = data.get(attr)
+
+                if isinstance(val, int):
+                    if val > 10**12:
+                        val = datetime.fromtimestamp(val / 1000000.0)
+                    elif 'date' in attr or 'birth' in attr:
+                        val = (datetime(1970, 1, 1) + timedelta(days=val)).date() 
+                
+                processed_values.append(val)
             
-            processed_values.append(val)
-        
-        hash_diff = self.generate_dv_hash({k: data[k] for k in sat_cfg['attributes'] if k in data})
+            hash_diff = self.generate_dv_hash({k: data[k] for k in sat_cfg['attributes'] if k in data})
 
-        cursor.execute(f"""
-            INSERT INTO dwh_detailed.{sat_cfg['table']}
-            ({sat_cfg['hub_key']}, hash_diff, record_source, {', '.join(sat_cfg['attributes'])})
-            SELECT %s, %s, %s, {', '.join(['%s']*len(sat_cfg['attributes']))}
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM dwh_detailed.{sat_cfg['table']}
-                WHERE {sat_cfg['hub_key']} = %s AND hash_diff = %s
-            )
-        """, (hub_hash_id, hash_diff, topic_config['name'], *processed_values, hub_hash_id, hash_diff))
+            cursor.execute(f"""
+                INSERT INTO dwh_detailed.{sat_cfg['table']}
+                ({sat_cfg['hub_key']}, hash_diff, record_source, {', '.join(sat_cfg['attributes'])})
+                SELECT %s, %s, %s, {', '.join(['%s']*len(sat_cfg['attributes']))}
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM dwh_detailed.{sat_cfg['table']}
+                    WHERE {sat_cfg['hub_key']} = %s AND hash_diff = %s
+                )
+            """, (hub_hash_id, hash_diff, topic_config['name'], *processed_values, hub_hash_id, hash_diff))
 
     def run(self):
         topics = []
