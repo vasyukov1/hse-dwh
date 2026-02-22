@@ -51,8 +51,7 @@ class DMPService:
         if not data:
             print(f"Skipping message: no 'after' data found in {message_value.get('op', 'unknown op')}")
             return
-        
-        print(f"Processing data for {topic_config['name']}: {data.get('email')}")
+
         cursor = self.db_conn.cursor()
         hub_hash_id = None
 
@@ -76,11 +75,17 @@ class DMPService:
                     target_hash = self.generate_dv_hash(target_bk_val)
                     link_hash = self.generate_dv_hash(hub_hash_id + target_hash)
 
-                    cursor.execute(f"""
-                        INSERT INTO dwh_detailed.{link_cfg['table']}
-                        ({link_cfg['link_key']}, {link_cfg['source_hub_key']}, {link_cfg['target_hub_key']}, record_source)
-                        VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING
-                    """, (link_hash, hub_hash_id, target_hash, topic_config['name']))
+                    try:
+                        cursor.execute(f"""
+                            INSERT INTO dwh_detailed.{link_cfg['table']} 
+                            ({link_cfg['link_key']}, {link_cfg['source_hub_key']}, {link_cfg['target_hub_key']}, record_source)
+                            VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING
+                        """, (link_hash, hub_hash_id, target_hash, topic_config['name']))
+                    except psycopg2.errors.ForeignKeyViolation:
+                        self.db_conn.rollback()
+                        print(f"Warning: Parent key {target_bk_val} not found in Hub. Link skipped.")
+                    except Exception as e:
+                        print(f"Link error: {e}")
 
         # SATELLITE
         if 'satellite' in topic_config:
