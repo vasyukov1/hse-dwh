@@ -21,10 +21,23 @@ fi
 source .env 2>/dev/null || echo "WARNING: .env not found, using defaults"
 
 
+echo "=== Generating Data Vault 2.0 DDL ==="
+rm -f ./dwh/ddl*.sql 2>/dev/null || true
+
+docker run --rm -v "$(pwd):/app" -w /app python:3.12-slim bash -c "pip install pyyaml --root-user-action=ignore && python dwh/generate_ddl.py"
+
+if [ ! -f "./dwh/ddl/001_dwh_detailed_ddl_generated.sql" ]; then
+    echo "ERROR: DDL generation failed"
+    exit 1
+fi
+echo "DDL generated successfully in dwh/ddl"
+
 # Clear data
 echo "Clearing data"
 rm -rf ./postgres-master-data/* 2>/dev/null || true
 rm -rf ./postgres-replica-data/* 2>/dev/null || true
+rm -rf ./postgres-dwh-data/* 2>/dev/null || true
+
 docker compose down -v 2>/dev/null || true
 
 
@@ -32,33 +45,27 @@ docker compose down -v 2>/dev/null || true
 echo "Starting postgres-master node..."
 docker compose up -d postgres-master
 
-# Wait for master to be ready
-echo "Waiting for master to start..."
-for i in {1..30}; do
-    if docker exec postgres-master pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
-        echo "Master is ready!"
-        echo "Waiting for PostgreSQL to accept queries..."
-        for j in {1..30}; do
-            if docker exec postgres-master psql -U "$POSTGRES_USER" -d postgres -c "SELECT 1" >/dev/null 2>&1; then
-                echo "PostgreSQL is accepting queries."
-                break
-            fi
-            sleep 2
-            if [ $j -eq 30 ]; then
-                echo "ERROR: PostgreSQL did not accept queries within 60 seconds"
-                docker logs postgres-master --tail 50
-                exit 1
-            fi
-        done
+echo "Waiting for master to complete initialization and become healthy..."
+for i in {1..40}; do
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' postgres-master 2>/dev/null || echo "starting")
+    
+    if [ "$STATUS" = "healthy" ]; then
+        echo "Master is fully initialized and healthy!"
         break
     fi
     sleep 2
-    if [ $i -eq 30 ]; then
-        echo "ERROR: Master failed to start within 60 seconds"
+    if [ $i -eq 40 ]; then
+        echo "ERROR: Master failed to become healthy within 80 seconds"
+        docker logs postgres-master --tail 50
         exit 1
     fi
 done
 
+until docker exec postgres-master pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 > /dev/null 2>&1; do
+    echo "Waiting for TCP socket to open..."
+    sleep 2
+done
+echo "PostgreSQL is accepting queries."
 
 # Create DBs, role and publications
 echo "Creating databases if they don't exist..."
@@ -66,7 +73,7 @@ create_db_if_not_exists() {
     local db_name=$1
     local exists=$(docker exec postgres-master psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$db_name'")
     if [ "$exists" != "1" ]; then
-        docker exec postgres-master psql -U postgres -c "CREATE DATABASE $db_name"
+        docker exec postgres-master psql -U postgres -c "CREATE DATABASE $db_name" 2>/dev/null || true
         echo "Database $db_name created"
     else
         echo "Database $db_name already exists"
@@ -136,7 +143,21 @@ echo "DBs, role and publications ensured."
 
 # Prepare replica config
 echo "Prepare replica config..."
-docker exec -it postgres-master sh /etc/postgresql/init-script/init.sh
+
+rm -rf ./postgres-replica-data/* 2>/dev/null || true
+
+docker exec -i \
+  -e PGPASSWORD="dbzpass" \
+  postgres-master pg_basebackup -h 127.0.0.1 -p 5432 -U dbzuser -D /tmp/replica_data -Fp -Xs -c fast -R
+
+docker exec -i postgres-master sed -i 's/host=127.0.0.1/host=postgres-master/g' /tmp/replica_data/postgresql.auto.conf
+
+docker cp postgres-master:/tmp/replica_data/. ./postgres-replica-data/
+
+docker exec -i postgres-master rm -rf /tmp/replica_data
+
+echo "Replica data prepared successfully!"
+
 
 # Restart master
 echo "Restart master node"

@@ -5,4 +5,5 @@ pg_basebackup -D /var/lib/postgresql/postgres-replica-data \
     -P \
     -U replicator \
     -Fp \
-    -R
+    -R \
+    -c fast

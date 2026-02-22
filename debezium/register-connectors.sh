@@ -97,7 +97,9 @@ USER_BODY='{
     "slot.name":"debezium_user_service",
     "table.include.list":"public.users,public.user_addresses,public.user_status_history",
     "snapshot.mode":"initial",
-    "heartbeat.interval.ms":"0"
+    "heartbeat.interval.ms":"0",
+    "time.precision.mode": "connect",
+    "decimal.handling.mode": "string"
   }
 }'
 
@@ -118,7 +120,9 @@ ORDER_BODY='{
     "slot.name":"debezium_order_service",
     "table.include.list":"public.orders,public.products,public.order_items,public.order_status_history",
     "snapshot.mode":"initial",
-    "heartbeat.interval.ms":"0"
+    "heartbeat.interval.ms":"0",
+    "time.precision.mode": "connect",
+    "decimal.handling.mode": "string"
   }
 }'
 
@@ -133,13 +137,15 @@ LOGISTICS_BODY='{
     "database.port":"5432",
     "database.user":"dbzuser",
     "database.password":"dbzpass",
-    "database.dbname":"logistics_service_db",r
+    "database.dbname":"logistics_service_db",
     "publication.name":"dbz_pub_logistics_service",
     "publication.autocreate.mode":"disabled",
     "slot.name":"debezium_logistics_service",
     "table.include.list":"public.warehouses,public.pickup_points,public.shipments,public.shipment_movements,public.shipment_status_history",
     "snapshot.mode":"initial",
-    "heartbeat.interval.ms":"0"
+    "heartbeat.interval.ms":"0",
+    "time.precision.mode": "connect",
+    "decimal.handling.mode": "string"
   }
 }'
 
