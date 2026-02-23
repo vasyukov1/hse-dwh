@@ -13,6 +13,7 @@ pgdata*/
 postgres-data/
 postgres-master-data/
 postgres-replica-data/
+postgres-dwh-data/
 
 # Test data
 test_data/

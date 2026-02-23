@@ -1,0 +1,67 @@
+services:
+  user_service:
+    topics:
+      - name: "user_service.public.users"
+        hub:
+          table: "hub_users"
+          business_key: "user_external_id"
+          target_key: "hk_users"
+        satellite:
+          table: "sat_users"
+          hub_key: "hk_users"
+          attributes:
+            - "email"
+            - "first_name"
+            - "last_name"
+            - "phone"
+            - "date_of_birth"
+            - "registration_date"
+            - "status"
+
+      - name: "user_service.public.user_addresses"
+        hub:
+          table: "hub_user_addresses"
+          business_key: "address_external_id"
+          target_key: "hk_user_addresses"
+        satellite:
+          table: "sat_user_addresses"
+          hub_key: "hk_user_addresses"
+          attributes:
+            - "address_type"
+            - "country"
+            - "city"
+            - "street_address"
+            - "is_default"
+        links:
+          - table: "lnk_user_addresses_users"
+            link_key: "hk_lnk_user_addresses_users"
+            source_hub_key: "hk_user_addresses"
+            target_hub_key: "hk_users"
+            target_business_key_field: "user_external_id"
+
+  logistics_service:
+    topics:
+      - name: "logistics_service.public.shipments"
+        hub:
+          table: "hub_shipments"
+          business_key: "shipment_external_id"
+          target_key: "hk_shipments"
+        satellite:
+          table: "sat_shipments"
+          hub_key: "hk_shipments"
+          attributes:
+            - "tracking_number"
+            - "status"
+            - "weight_grams"
+            - "recipient_name"
+        links:
+          - table: "lnk_shipments_orders"
+            link_key: "hk_lnk_shipments_orders"
+            source_hub_key: "hk_shipments"
+            target_hub_key: "hk_orders"
+            target_business_key_field: "order_external_id"
+          - table: "lnk_shipments_warehouses"
+            link_key: "hk_lnk_shipments_warehouses"
+            source_hub_key: "hk_shipments"
+            target_hub_key: "hk_warehouses"
+            target_business_key_field: "origin_warehouse_code"

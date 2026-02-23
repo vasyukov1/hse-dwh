@@ -11,13 +11,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_MASTER_PORT: ${POSTGRES_MASTER_PORT}
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf' -c 'hba_file=/etc/postgresql/pg_hba.conf'
     volumes:
-      - ./postgres-master-data:/var/lib/postgresql/data                             # data
-      - ./postgres-replica-data:/var/lib/postgresql/postgres-replica-data           # replica
-      - ./migrations:/docker-entrypoint-initdb.d:ro                                 # migrations
-      - ./init-script:/etc/postgresql/init-script                                   # init
-      - ./init-script/common-config/postgresql.conf:/etc/postgresql/postgresql.conf # config
-      - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf         # access
+      - ./postgres-master-data:/var/lib/postgresql/data                                 # data
+      # - ./migrations:/docker-entrypoint-initdb.d:ro                                     # migrations
+      - ./init-script:/etc/postgresql/init-script                                       # init
+      - ./init-script/common-config/postgresql.conf:/etc/postgresql/postgresql.conf:ro  # config
+      - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro          # access
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -38,9 +38,103 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_REPLICA_PORT: ${POSTGRES_REPLICA_PORT}
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf' -c 'hba_file=/etc/postgresql/pg_hba.conf'
     volumes:
-      - ./postgres-replica-data:/var/lib/postgresql/data                            # data
-      - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf         # access
+      - ./postgres-replica-data:/var/lib/postgresql/data                                # data
+      - ./init-script/common-config/postgresql.conf:/etc/postgresql/postgresql.conf:ro  # config
+      - ./init-script/common-config/pg_hba.conf:/etc/postgresql/pg_hba.conf             # access
+    networks:
+      - postgres-network
+
+  postgres-dwh:
+    container_name: postgres-dwh
+    image: postgres:17
+    restart: always
+    ports:
+      - "${POSTGRES_DWH_PORT}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DWH_DB}
+    volumes:
+      - ./postgres-dwh-data:/var/lib/postgresql/data
+      - ./dwh/ddl:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DWH_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - postgres-network
+ 
+  kafka:
+    container_name: kafka
+    image: confluentinc/cp-kafka:7.7.0
+    ports:
+      - "${KAFKA_PORT}:9092"
+    environment:
+      CLUSTER_ID: "dpewbNkETgCahBhaTTyh0Q"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    networks:
+      - postgres-network
+
+  debezium:
+    container_name: debezium
+    image: debezium/connect:2.5
+    restart: always
+    depends_on:
+      - kafka
+      - postgres-master
+    ports:
+      - "${DEBEZIUM_PORT}:8083"
+    environment:
+      BOOTSTRAP_SERVERS: "kafka:9092"
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:9092"
+
+      CONFIG_STORAGE_TOPIC: "debezium_configs"
+      CONNECT_CONFIG_STORAGE_TOPIC: "debezium_configs"
+
+      OFFSET_STORAGE_TOPIC: "debezium_offsets"
+      CONNECT_OFFSET_STORAGE_TOPIC: "debezium_offsets"
+
+      STATUS_STORAGE_TOPIC: "debezium_statuses"
+      CONNECT_STATUS_STORAGE_TOPIC: "debezium_statuses"
+
+      CONNECT_GROUP_ID: "connect-cluster-1"
+
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+      CONNECT_REST_ADVERTISED_HOST_NAME: "debezium"
+    networks:
+      - postgres-network
+
+  dmp-service:
+    build: ./dmp
+    container_name: dmp-service
+    depends_on:
+      - kafka
+      - postgres-dwh
+      - debezium
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DWH_HOST: ${DWH_HOST}
+      DWH_DB: ${POSTGRES_DWH_DB}
+      DWH_USER: ${POSTGRES_USER}
+      DWH_PASSWORD: ${POSTGRES_PASSWORD}
+      KAFKA_BOOTSTRAP: kafka:9092
     networks:
       - postgres-network
 
