@@ -4,7 +4,7 @@ set -e
 echo "=== Starting DWH setup ==="
 
 
-# Create .env if it doesn't exist
+# 1. Create .env
 if [ ! -f .env ]; then
     echo "Creating .env from .env.example..."
     if [ -f .env.example ]; then
@@ -21,54 +21,54 @@ fi
 source .env 2>/dev/null || echo "WARNING: .env not found, using defaults"
 
 
+# 2. Generate Data Vault 2.0 DDL
 echo "=== Generating Data Vault 2.0 DDL ==="
 rm -f ./dwh/ddl*.sql 2>/dev/null || true
 
 docker run --rm -v "$(pwd):/app" -w /app python:3.12-slim bash -c "pip install pyyaml --root-user-action=ignore && python dwh/generate_ddl.py"
 
-if [ ! -f "./dwh/ddl/001_dwh_detailed_ddl_generated.sql" ]; then
+if [ ! -f "./dwh/ddl/001_starrocks_dwh_detailed.sql" ]; then
     echo "ERROR: DDL generation failed"
     exit 1
 fi
 echo "DDL generated successfully in dwh/ddl"
 
-# Clear data
-echo "Clearing data"
+
+# 3. Clear data
+echo "Clearing data..."
+docker compose down -v 2>/dev/null || true
 rm -rf ./postgres-master-data/* 2>/dev/null || true
 rm -rf ./postgres-replica-data/* 2>/dev/null || true
-rm -rf ./postgres-dwh-data/* 2>/dev/null || true
-
-docker compose down -v 2>/dev/null || true
+rm -rf ./starrocks-data/* 2>/dev/null || true
 
 
-# Start master
-echo "Starting postgres-master node..."
+# 4. Start Postgres Master
+echo "Starting postgres-master..."
 docker compose up -d postgres-master
 
-echo "Waiting for master to complete initialization and become healthy..."
+echo "Waiting for master to become healthy..."
 for i in {1..40}; do
     STATUS=$(docker inspect --format='{{.State.Health.Status}}' postgres-master 2>/dev/null || echo "starting")
-    
     if [ "$STATUS" = "healthy" ]; then
-        echo "Master is fully initialized and healthy!"
+        echo "Master is healthy!"
         break
     fi
     sleep 2
     if [ $i -eq 40 ]; then
-        echo "ERROR: Master failed to become healthy within 80 seconds"
+        echo "ERROR: Master failed to become healthy"
         docker logs postgres-master --tail 50
         exit 1
     fi
 done
 
 until docker exec postgres-master pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 > /dev/null 2>&1; do
-    echo "Waiting for TCP socket to open..."
     sleep 2
 done
 echo "PostgreSQL is accepting queries."
 
-# Create DBs, role and publications
-echo "Creating databases if they don't exist..."
+
+# 5. Create DBs
+echo "Creating databases..."
 create_db_if_not_exists() {
     local db_name=$1
     local exists=$(docker exec postgres-master psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$db_name'")
@@ -85,7 +85,7 @@ create_db_if_not_exists "order_service_db"
 create_db_if_not_exists "logistics_service_db"
 
 
-# Create replication user
+# 6. Create replication user
 docker exec -i postgres-master psql -U postgres -d postgres <<'SQL'
 DO $$
 BEGIN
@@ -97,7 +97,7 @@ END$$;
 SQL
 
 
-# Create tables in each service database 
+# 7. Create tables in each service database 
 echo "Creating tables in service databases..."
 
 apply_sql_file() {
@@ -112,12 +112,12 @@ apply_sql_file() {
 }
 
 echo "Creating tables in service databases..."
-apply_sql_file "user_service_db" "./migrations/001_user_service_db.sql"
-apply_sql_file "order_service_db" "./migrations/002_order_service_db.sql"
-apply_sql_file "logistics_service_db" "./migrations/003_logistics_service_db.sql"
+apply_sql_file "user_service_db"        "./migrations/001_user_service_db.sql"
+apply_sql_file "order_service_db"       "./migrations/002_order_service_db.sql"
+apply_sql_file "logistics_service_db"   "./migrations/003_logistics_service_db.sql"
 
 
-# Create publications
+# 8. Create publications
 echo "Creating publications..."
 
 create_publication_if_not_exists() {
@@ -129,8 +129,6 @@ create_publication_if_not_exists() {
     if [ "$pub_exists" != "1" ]; then
         docker exec -i postgres-master psql -U postgres -d "$db_name" -c "CREATE PUBLICATION $pub_name FOR TABLE $tables;"
         echo "Publication $pub_name created in $db_name."
-    else
-        echo "Publication $pub_name already exists in $db_name."
     fi
 }
 
@@ -141,36 +139,27 @@ create_publication_if_not_exists "logistics_service_db" "dbz_pub_logistics_servi
 echo "DBs, role and publications ensured."
 
 
-# Prepare replica config
-echo "Prepare replica config..."
-
+# 9. Prepare replica config
+echo "Preparing replica config..."
 rm -rf ./postgres-replica-data/* 2>/dev/null || true
 
-docker exec -i \
-  -e PGPASSWORD="dbzpass" \
-  postgres-master pg_basebackup -h 127.0.0.1 -p 5432 -U dbzuser -D /tmp/replica_data -Fp -Xs -c fast -R
+docker exec -i -e PGPASSWORD="dbzpass" postgres-master \
+  pg_basebackup -h 127.0.0.1 -p 5432 -U dbzuser -D /tmp/replica_data -Fp -Xs -c fast -R
 
-docker exec -i postgres-master sed -i 's/host=127.0.0.1/host=postgres-master/g' /tmp/replica_data/postgresql.auto.conf
+docker exec -i postgres-master \
+  sed -i 's/host=127.0.0.1/host=postgres-master/g' /tmp/replica_data/postgresql.auto.conf
 
 docker cp postgres-master:/tmp/replica_data/. ./postgres-replica-data/
-
 docker exec -i postgres-master rm -rf /tmp/replica_data
 
-echo "Replica data prepared successfully!"
-
-
-# Restart master
-echo "Restart master node"
 docker compose restart postgres-master
 sleep 5
 
 
-# Start replica
-echo "Starting replica node..."
+# 10. Start Postgres Replica
+echo "Starting postgres-replica..."
 docker compose up -d postgres-replica
 
-# Wait for replica to be ready
-echo "Waiting for replica to start..."
 for i in {1..30}; do
     if docker exec postgres-replica pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
         echo "Replica is ready!"
@@ -184,21 +173,62 @@ for i in {1..30}; do
 done
 
 
-# Start Kafka
-echo "Starting kafka..."
+# 11. Start Starrocks MPP DWH
+echo "Starting StarRocks MPP DWH..."
+mkdir -p ./starrocks-data/fe ./starrocks-data/be
+docker compose up -d starrocks
+
+echo "Waiting for StarRocks FE HTTP..."
+for i in {1..80}; do
+    if curl -fsS "http://localhost:${STARROCKS_FE_HTTP_PORT:-8030}/api/bootstrap" >/dev/null 2>&1; then
+        echo "StarRocks FE is up!"
+        break
+    fi
+    sleep 3
+    if [ $i -eq 80 ]; then
+        echo "ERROR: StarRocks FE did not start"
+        docker logs starrocks --tail 50
+        exit 1
+    fi
+done
+
+echo "Waiting for StarRocks BE to join FE..."
+for i in {1..40}; do 
+    ALIVE=$(docker exec starrocks mysql -h 127.0.0.1 -P 9030 -u root \
+      --connect-timeout=5 -s -e "SHOW BACKENDS\G" 2>/dev/null \
+      | grep -c "Alive: true" || echo "0")
+    if [ "$ALIVE" -ge "1" ]; then
+        echo "StarRocks BE is alive!"
+        break
+    fi
+    sleep 5
+    if [ $i -eq 40 ]; then
+        echo "ERROR: StarRocks BE did not join"
+        exit 1
+    fi 
+done
+
+echo "Initializing StarRocks schema (dwh_detailed)..."
+docker exec -i starrocks mysql -h 127.0.0.1 -P 9030 -u root \
+    < ./dwh/ddl/001_starrocks_dwh_detailed.sql
+echo "StarRocks schema initialized!"
+
+
+# 12. Start Kafka
+echo "Starting Kafka..."
 docker compose up -d kafka
 
 echo "Waiting for Kafka broker to accept API..."
-# Wait until kafka-broker-api-versions works
 for i in {1..60}; do
-    if docker exec kafka bash -c "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"; then
-        echo "Kafka broker is reachable"
+    if docker exec kafka bash -c \
+        "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"; then
+        echo "Kafka is reachable"
         break
     fi
     sleep 2
     if [ "$i" -eq 60 ]; then
-        echo "ERROR: Kafka broker did not become ready"
-        docker logs kafka --tail 200
+        echo "ERROR: Kafka did not ready"
+        docker logs kafka --tail 50
         exit 1
     fi
 done
@@ -211,23 +241,24 @@ for i in {1..30}; do
     fi
     sleep 2
     if [ "$i" -eq 30 ]; then
-        echo "ERROR: Kafka topics API did not become ready"
+        echo "ERROR: Kafka topics API did not ready"
         exit 1
     fi
 done
 
 
-# Create Debezium topics
+# 13. Create Debezium topics
 echo "Creating Debezium internal topics..."
 docker exec kafka bash -lc "\
-  kafka-topics --bootstrap-server localhost:9092 --create --replication-factor 1 --partitions 1 --topic debezium_configs --config cleanup.policy=compact || true && \
-  kafka-topics --bootstrap-server localhost:9092 --create --replication-factor 1 --partitions 1 --topic debezium_offsets --config cleanup.policy=compact || true && \
-  kafka-topics --bootstrap-server localhost:9092 --create --replication-factor 1 --partitions 1 --topic debezium_statuses --config cleanup.policy=compact || true \
-"
-echo "Debezium topics ensured."
+  kafka-topics --bootstrap-server localhost:9092 --create --replication-factor 1 \
+    --partitions 1 --topic debezium_configs --config cleanup.policy=compact || true && \
+  kafka-topics --bootstrap-server localhost:9092 --create --replication-factor 1 \
+    --partitions 1 --topic debezium_offsets --config cleanup.policy=compact || true && \
+  kafka-topics --bootstrap-server localhost:9092 --create --replication-factor 1 \
+    --partitions 1 --topic debezium_statuses --config cleanup.policy=compact || true"
 
 
-# Start Debezium
+# 14. Start Debezium
 echo "Starting debezium..."
 docker compose up -d debezium
 
@@ -240,13 +271,13 @@ for i in {1..60}; do
   sleep 2
   if [ "$i" -eq 60 ]; then
     echo "ERROR: Debezium Connect did not start"
-    docker logs debezium --tail 200
+    docker logs debezium --tail 50
     exit 1
   fi
 done
 
 
-# Register connectors
+# 15. Register connectors
 if [ -f ./debezium/register-connectors.sh ]; then
   echo "Registering connectors via debezium/register-connectors.sh ..."
   chmod +x ./debezium/register-connectors.sh
@@ -256,14 +287,16 @@ else
 fi
 
 
-# Start DMP service
+# 16. Start DMP service
 echo "Starting DMP Service..."
 docker compose up -d dmp-service
 echo "DMP Service is running"
 
 
+# Finish
 echo "Connection strings:"
 echo "  Master:      postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:$POSTGRES_MASTER_PORT/$POSTGRES_DB"
 echo "  Replica:     postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:$POSTGRES_REPLICA_PORT/$POSTGRES_DB"
+echo "  StarRocks:   mysql -h localhost -P ${STARROCKS_FE_MYSQL_PORT:-9030} -u root -D dwh_detailed"
 echo ""
 echo "=== Setup completed successfully! ==="

@@ -1,0 +1,230 @@
+---
+config:
+  layout: dagre
+---
+erDiagram
+  direction TB
+
+  hub_users {
+    varchar_32 hk_users PK
+    uuid user_external_id UK
+    datetime load_dt
+    varchar record_source
+  }
+  hub_user_addresses {
+    varchar_32 hk_user_addresses PK
+    uuid address_external_id UK
+    datetime load_dt
+    varchar record_source
+  }
+  hub_products {
+    varchar_32 hk_products PK
+    varchar product_sku UK
+    datetime load_dt
+    varchar record_source
+  }
+  hub_orders {
+    varchar_32 hk_orders PK
+    uuid order_external_id UK
+    datetime load_dt
+    varchar record_source
+  }
+  hub_warehouses {
+    varchar_32 hk_warehouses PK
+    varchar warehouse_code UK
+    datetime load_dt
+    varchar record_source
+  }
+  hub_pickup_points {
+    varchar_32 hk_pickup_points PK
+    varchar pickup_point_code UK
+    datetime load_dt
+    varchar record_source
+  }
+  hub_shipments {
+    varchar_32 hk_shipments PK
+    uuid shipment_external_id UK
+    datetime load_dt
+    varchar record_source
+  }
+
+  lnk_user_addresses_users {
+    varchar_32 hk_lnk_user_addresses_users PK
+    varchar_32 hk_user_addresses FK
+    varchar_32 hk_users FK
+    datetime load_dt
+    varchar record_source
+  }
+  lnk_orders_users {
+    varchar_32 hk_lnk_orders_users PK
+    varchar_32 hk_orders FK
+    varchar_32 hk_users FK
+    datetime load_dt
+    varchar record_source
+  }
+  lnk_orders_user_addresses {
+    varchar_32 hk_lnk_orders_user_addresses PK
+    varchar_32 hk_orders FK
+    varchar_32 hk_user_addresses FK
+    datetime load_dt
+    varchar record_source
+  }
+  lnk_order_items {
+    varchar_32 hk_lnk_order_items PK
+    varchar_32 hk_orders FK
+    varchar_32 hk_products FK
+    datetime load_dt
+    varchar record_source
+  }
+  lnk_shipments_orders {
+    varchar_32 hk_lnk_shipments_orders PK
+    varchar_32 hk_shipments FK
+    varchar_32 hk_orders FK
+    datetime load_dt
+    varchar record_source
+  }
+  lnk_shipments_warehouses {
+    varchar_32 hk_lnk_shipments_warehouses PK
+    varchar_32 hk_shipments FK
+    varchar_32 hk_warehouses FK
+    datetime load_dt
+    varchar record_source
+  }
+  lnk_shipments_pickup_points {
+    varchar_32 hk_lnk_shipments_pickup_points PK
+    varchar_32 hk_shipments FK
+    varchar_32 hk_pickup_points FK
+    datetime load_dt
+    varchar record_source
+  }
+  lnk_shipments_user_addresses {
+    varchar_32 hk_lnk_shipments_user_addresses PK
+    varchar_32 hk_shipments FK
+    varchar_32 hk_user_addresses FK
+    datetime load_dt
+    varchar record_source
+  }
+
+  sat_users {
+    varchar_32 hk_users FK
+    varchar_128 hash_diff
+    datetime load_dt
+    varchar email
+    varchar first_name
+    varchar last_name
+    varchar status
+  }
+  sat_user_addresses {
+    varchar_32 hk_user_addresses FK
+    varchar_128 hash_diff
+    datetime load_dt
+    varchar country
+    varchar city
+    varchar street_address
+  }
+  sat_user_status_history {
+    varchar_32 hk_users FK
+    datetime load_dt
+    varchar old_status
+    varchar new_status
+    varchar change_reason
+  }
+  sat_products {
+    varchar_32 hk_products FK
+    varchar_128 hash_diff
+    datetime load_dt
+    varchar product_name
+    varchar category
+    decimal price
+  }
+  sat_orders {
+    varchar_32 hk_orders FK
+    varchar_128 hash_diff
+    datetime load_dt
+    varchar status
+    decimal total_amount
+    varchar payment_status
+  }
+  sat_order_status_history {
+    varchar_32 hk_orders FK
+    datetime load_dt
+    varchar old_status
+    varchar new_status
+  }
+  sat_order_items {
+    varchar_32 hk_lnk_order_items FK
+    varchar_128 hash_diff
+    datetime load_dt
+    int quantity
+    decimal unit_price
+    decimal total_price
+  }
+  sat_warehouses {
+    varchar_32 hk_warehouses FK
+    varchar_128 hash_diff
+    datetime load_dt
+    varchar warehouse_name
+    varchar city
+    boolean is_active
+  }
+  sat_pickup_points {
+    varchar_32 hk_pickup_points FK
+    varchar_128 hash_diff
+    datetime load_dt
+    varchar pickup_point_name
+    varchar city
+    boolean is_active
+  }
+  sat_shipments {
+    varchar_32 hk_shipments FK
+    varchar_128 hash_diff
+    datetime load_dt
+    varchar tracking_number
+    varchar status
+    int weight_grams
+  }
+  sat_shipment_movements {
+    varchar_32 hk_shipments FK
+    datetime load_dt
+    varchar movement_type
+    varchar location_code
+    decimal latitude
+    decimal longitude
+  }
+  sat_shipment_status_history {
+    varchar_32 hk_shipments FK
+    datetime load_dt
+    varchar old_status
+    varchar new_status
+    boolean customer_notified
+  }
+
+  hub_users ||--o{ sat_users : "hk_users"
+  hub_users ||--o{ sat_user_status_history : "hk_users"
+  hub_user_addresses ||--o{ sat_user_addresses : "hk_user_addresses"
+  hub_products ||--o{ sat_products : "hk_products"
+  hub_orders ||--o{ sat_orders : "hk_orders"
+  hub_orders ||--o{ sat_order_status_history : "hk_orders"
+  hub_warehouses ||--o{ sat_warehouses : "hk_warehouses"
+  hub_pickup_points ||--o{ sat_pickup_points : "hk_pickup_points"
+  hub_shipments ||--o{ sat_shipments : "hk_shipments"
+  hub_shipments ||--o{ sat_shipment_movements : "hk_shipments"
+  hub_shipments ||--o{ sat_shipment_status_history : "hk_shipments"
+
+  hub_users ||--o{ lnk_user_addresses_users : "hk_users"
+  hub_user_addresses ||--o{ lnk_user_addresses_users : "hk_user_addresses"
+  hub_orders ||--o{ lnk_orders_users : "hk_orders"
+  hub_users ||--o{ lnk_orders_users : "hk_users"
+  hub_orders ||--o{ lnk_orders_user_addresses : "hk_orders"
+  hub_user_addresses ||--o{ lnk_orders_user_addresses : "hk_user_addresses"
+  hub_orders ||--o{ lnk_order_items : "hk_orders"
+  hub_products ||--o{ lnk_order_items : "hk_products"
+  lnk_order_items ||--o{ sat_order_items : "hk_lnk_order_items"
+  hub_shipments ||--o{ lnk_shipments_orders : "hk_shipments"
+  hub_orders ||--o{ lnk_shipments_orders : "hk_orders"
+  hub_shipments ||--o{ lnk_shipments_warehouses : "hk_shipments"
+  hub_warehouses ||--o{ lnk_shipments_warehouses : "hk_warehouses"
+  hub_shipments ||--o{ lnk_shipments_pickup_points : "hk_shipments"
+  hub_pickup_points ||--o{ lnk_shipments_pickup_points : "hk_pickup_points"
+  hub_shipments ||--o{ lnk_shipments_user_addresses : "hk_shipments"
+  hub_user_addresses ||--o{ lnk_shipments_user_addresses : "hk_user_addresses"
