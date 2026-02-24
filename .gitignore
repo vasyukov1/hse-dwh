@@ -8,12 +8,15 @@
 # Environments
 .env
 
+# Python
+venv/
+
 # PostgreSQL
 pgdata*/
 postgres-data/
 postgres-master-data/
 postgres-replica-data/
-postgres-dwh-data/
+starrocks-data/
 
 # Test data
 test_data/

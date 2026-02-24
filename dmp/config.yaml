@@ -1,4 +1,7 @@
 services:
+  # =============================================================
+  # USER SERVICE
+  # =============================================================
   user_service:
     topics:
       - name: "user_service.public.users"
@@ -39,8 +42,159 @@ services:
             target_hub_key: "hk_users"
             target_business_key_field: "user_external_id"
 
+      # История статусов — нет business_key, пишем прямо в sat (append-only)
+      - name: "user_service.public.user_status_history"
+        history_satellite:
+          table: "sat_user_status_history"
+          hub_key: "hk_users"
+          parent_business_key_field: "user_external_id"
+          parent_hub_table: "hub_users"
+          parent_hub_key: "hk_users"
+          attributes:
+            - "old_status"
+            - "new_status"
+            - "change_reason"
+            - "changed_at"
+            - "changed_by"
+            - "session_id"
+            - "ip_address"
+            - "user_agent"
+
+  # =============================================================
+  # ORDER SERVICE
+  # =============================================================
+  order_service:
+    topics:
+      - name: "order_service.public.products"
+        hub:
+          table: "hub_products"
+          business_key: "product_sku"
+          target_key: "hk_products"
+        satellite:
+          table: "sat_products"
+          hub_key: "hk_products"
+          attributes:
+            - "product_name"
+            - "category"
+            - "brand"
+            - "price"
+            - "currency"
+            - "weight_grams"
+            - "is_active"
+
+      - name: "order_service.public.orders"
+        hub:
+          table: "hub_orders"
+          business_key: "order_external_id"
+          target_key: "hk_orders"
+        satellite:
+          table: "sat_orders"
+          hub_key: "hk_orders"
+          attributes:
+            - "order_number"
+            - "order_date"
+            - "status"
+            - "subtotal"
+            - "tax_amount"
+            - "shipping_cost"
+            - "discount_amount"
+            - "total_amount"
+            - "currency"
+            - "delivery_type"
+            - "payment_method"
+            - "payment_status"
+        links:
+          - table: "lnk_orders_users"
+            link_key: "hk_lnk_orders_users"
+            source_hub_key: "hk_orders"
+            target_hub_key: "hk_users"
+            target_business_key_field: "user_external_id"
+          - table: "lnk_orders_user_addresses"
+            link_key: "hk_lnk_orders_user_addresses"
+            source_hub_key: "hk_orders"
+            target_hub_key: "hk_user_addresses"
+            target_business_key_field: "delivery_address_external_id"
+
+      - name: "order_service.public.order_items"
+        history_satellite:
+          table: "sat_order_items"
+          hub_key: "hk_lnk_order_items"
+          parent_business_key_field: "order_external_id"
+          parent_hub_table: "hub_orders"
+          parent_hub_key: "hk_orders"
+          secondary_business_key_field: "product_sku"
+          secondary_hub_table: "hub_products"
+          secondary_hub_key: "hk_products"
+          link_table: "lnk_order_items"
+          link_key: "hk_lnk_order_items"
+          attributes:
+            - "quantity"
+            - "unit_price"
+            - "total_price"
+            - "product_name_snapshot"
+            - "product_category_snapshot"
+            - "product_brand_snapshot"
+
+      - name: "order_service.public.order_status_history"
+        history_satellite:
+          table: "sat_order_status_history"
+          hub_key: "hk_orders"
+          parent_business_key_field: "order_external_id"
+          parent_hub_table: "hub_orders"
+          parent_hub_key: "hk_orders"
+          attributes:
+            - "old_status"
+            - "new_status"
+            - "change_reason"
+            - "changed_at"
+            - "changed_by"
+            - "session_id"
+            - "notes"
+
+  # =============================================================
+  # LOGISTICS SERVICE
+  # =============================================================
   logistics_service:
     topics:
+      - name: "logistics_service.public.warehouses"
+        hub:
+          table: "hub_warehouses"
+          business_key: "warehouse_code"
+          target_key: "hk_warehouses"
+        satellite:
+          table: "sat_warehouses"
+          hub_key: "hk_warehouses"
+          attributes:
+            - "warehouse_name"
+            - "warehouse_type"
+            - "country"
+            - "region"
+            - "city"
+            - "street_address"
+            - "is_active"
+            - "max_capacity_cubic_meters"
+            - "operating_hours"
+            - "contact_phone"
+            - "manager_name"
+
+      - name: "logistics_service.public.pickup_points"
+        hub:
+          table: "hub_pickup_points"
+          business_key: "pickup_point_code"
+          target_key: "hk_pickup_points"
+        satellite:
+          table: "sat_pickup_points"
+          hub_key: "hk_pickup_points"
+          attributes:
+            - "pickup_point_name"
+            - "pickup_point_type"
+            - "country"
+            - "city"
+            - "is_active"
+            - "max_capacity_packages"
+            - "contact_phone"
+            - "partner_name"
+
       - name: "logistics_service.public.shipments"
         hub:
           table: "hub_shipments"
@@ -53,7 +207,11 @@ services:
             - "tracking_number"
             - "status"
             - "weight_grams"
+            - "volume_cubic_cm"
+            - "package_count"
+            - "destination_type"
             - "recipient_name"
+            - "delivery_signature"
         links:
           - table: "lnk_shipments_orders"
             link_key: "hk_lnk_shipments_orders"
@@ -65,3 +223,42 @@ services:
             source_hub_key: "hk_shipments"
             target_hub_key: "hk_warehouses"
             target_business_key_field: "origin_warehouse_code"
+          - table: "lnk_shipments_pickup_points"
+            link_key: "hk_lnk_shipments_pickup_points"
+            source_hub_key: "hk_shipments"
+            target_hub_key: "hk_pickup_points"
+            target_business_key_field: "destination_pickup_point_code"
+
+      - name: "logistics_service.public.shipment_movements"
+        history_satellite:
+          table: "sat_shipment_movements"
+          hub_key: "hk_shipments"
+          parent_business_key_field: "shipment_external_id"
+          parent_hub_table: "hub_shipments"
+          parent_hub_key: "hk_shipments"
+          attributes:
+            - "movement_type"
+            - "location_type"
+            - "location_code"
+            - "movement_datetime"
+            - "operator_name"
+            - "notes"
+            - "latitude"
+            - "longitude"
+
+      - name: "logistics_service.public.shipment_status_history"
+        history_satellite:
+          table: "sat_shipment_status_history"
+          hub_key: "hk_shipments"
+          parent_business_key_field: "shipment_external_id"
+          parent_hub_table: "hub_shipments"
+          parent_hub_key: "hk_shipments"
+          attributes:
+            - "old_status"
+            - "new_status"
+            - "change_reason"
+            - "changed_at"
+            - "changed_by"
+            - "location_type"
+            - "location_code"
+            - "customer_notified"
