@@ -1,6 +1,6 @@
 # HSE Data Warehouse
 
-Implementation of a Data Warehouse for a large marketplace with three microservice databases.
+Implementation of a Data Warehouse for a large marketplace with three microservice databases using Data Vault 2.0 architecture and StarRocks MPP.
 
 Author: Alexander Vasyukov.
 
@@ -19,27 +19,41 @@ Implemented 6-month customer cohort analysis tracking retention rates, total rev
 
 ---
 
-## Database Architecture
+**Main Requirements:**
+- **Architecture Selection & DDL**: Data Vault 2.0 architecture with full DDL
+  - DDL file: [`dwh/ddl/001_starrocks_dwh_detailed.sql`](dwh/ddl/001_starrocks_dwh_detailed.sql)
+  - ER Diagram: [`dwh_detailed_diagram.mmd`](dwh_detailed_diagram.mmd)
+  - Architecture docs: [`docs/data_vault.md`](docs/data_vault.md)
+ 
+- **Debezium Integration**: Full CDC setup with Kafka
+  - Connector registration: [`debezium/register-connectors.sh`](debezium/register-connectors.sh)
+  - 3 connectors: user_service, order_service, logistics_service
+  
+- **DMP Service**: Python service for data processing
+  - Service code: [`dmp/main.py`](dmp/main.py)
+  - Configuration: [`dmp/config.yaml`](dmp/config.yaml)
 
-The solution implements a single PostgreSQL instance containing three logically separated databases:
+- **DDL Code Generator**: YAML-driven DDL generation
+  - Generator: [`dwh/generate_ddl.py`](dwh/generate_ddl.py)
+  - Config: [`dwh/source_schema.yaml`](dwh/source_schema.yaml)
+  
+- **MPP Database**: StarRocks instead of PostgreSQL
+  - Auto-generated DDL optimized for MPP
 
-1. **user_service_db**:
-- `users`
-- `user_addresses`
-- `user_status_history`
+---
 
-2. **order_service_db**:
-- `orders`
-- `order_items`
-- `order_status_history`
-- `products`
+## Architecture
 
-3. **logistics_service_db**:
-- `warehouses`
-- `pickup_points`
-- `shipments`
-- `shipment_movements`
-- `shipment_status_history`
+This project implements a complete data warehouse solution with:
+- **Source Systems**: 3 microservice databases (PostgreSQL)
+- **CDC Layer**: Debezium + Kafka
+- **DWH Layer**: StarRocks MPP with Data Vault 2.0
+- **Orchestration**: Docker Compose
+
+### Source Microservices:
+1. **user_service_db** - User information and addresses
+2. **order_service_db** - Orders, products, and order items  
+3. **logistics_service_db** - Shipments, warehouses, and movements
 
 Check existing of tables:
 ```bash
@@ -48,23 +62,153 @@ docker exec -it postgres-master psql -U <postgres_user> -d <db_name> -c "\dt"
 
 ---
 
-## DDL generator for detailed layer
+## Data Vault 2.0
 
-The project has implementated a custom Python code generator for creating DDL scripts for the detailed DWH layer. The selected architecture of the detailed layer if Data Vault 2.0, as it perfectly handles historicity and microservices integration.
+**Decision rationale:**
 
-### The principle of operation
+1. **Microservices Architecture Fit**: Data Vault 2.0 naturally handles data from multiple source systems with different business keys and relationships. Each microservice becomes a separate `record_source`.
 
-The generator (`dwh_generator/generate_ddl.py`) works on the principle of "Schema-Driven Development":
-1. **Reading the source configuration**: The script accepts the input file `source_schema.yaml`, which contains metadata about the source tables (names, business key, attributes, foreign keys).
-2. **Mapping in Data Vault 2.0**:
-    - If an entity has a `business_key`, the generator automatically creates a table **HUB** (`hub_<entity>`) with a hash key (`hk_<entity>`), a business key, `load_dt` and `record_source`.
-    - Non-key attributes of an entity are places in the **SATELLITE** table (`sat_<entity>`), which links to the Hub and contains the `hash_diff` field for tracking changes.
-    - If the `references` block is specified in yaml (a link to another table), the genertor creates a **LINK** table (`link_<entity>_<target>`) linking the hash keys of the two Hubs.
-3. **SQL Generation**: The script compiles all DDL commands and saves them to the migration directory (file `migrations/004_dwh_detailed_ddl.sql`), creating the schema `dwh_detailed`.
+2. **Historicity & Auditability**: 
+   - **Hubs** store immutable business keys
+   - **Satellites** track attribute changes with `load_dt` and `hash_diff`
+   - **Links** capture evolving relationships between entities
+   - Perfect for tracking order status changes, user profile updates, shipment movements
 
-### Advantuges of the approach
-- When adding new filed or tables in microservices, it is enough to simply update the yaml config. DDL for DWH will be updated automatically without manually writing the boilerplate code.
-- Strict compliance with Data Vault naming standards (`hk_`, `hub_`, `sat_`, `link_`, `load_dt`).
+3. **Incremental Loading**: 
+   - Insert-only pattern (no updates/deletes in Hubs/Links)
+   - Efficient CDC processing from Debezium
+   - Easy to parallelize across multiple entities
+
+4. **Schema Flexibility**:
+   - Easy to add new sources without restructuring
+   - Satellites can be added/modified independently
+   - Links support many-to-many relationships naturally
+
+5. **Cross-Database References**: 
+   - Orders reference users from another database
+   - Shipments reference addresses and orders from other systems
+   - Data Vault handles this through business keys and Links
+
+---
+
+## StarRocks MPP
+
+**Decision rationale:**
+
+1. **True MPP Architecture**: 
+   - Distributed query execution across BE nodes
+   - Scales horizontally for large datasets
+   - Much faster than single-node PostgreSQL for OLAP
+
+2. **Data Vault Optimization**:
+   - Efficient JOIN performance (unlike ClickHouse)
+   - Supports complex multi-table queries needed for Data Vault
+   - UNIQUE KEY tables for Hubs/Links (de-duplication)
+   - DUPLICATE KEY tables for Satellites (append-only)
+
+3. **MySQL Protocol Compatibility**:
+   - Easy integration with existing tools
+   - Simple Python connectivity via `pymysql`
+   - No need for specialized drivers
+
+4. **Real-time Ingestion**:
+   - Sub-second INSERT latency
+   - Perfect for streaming CDC from Kafka
+   - No need for batch processing
+
+5. **Storage Efficiency**:
+   - Columnar storage reduces disk usage
+   - Built-in compression
+   - Automatic data compaction
+
+---
+
+## DDL Code Generator
+
+**Principle of operation:**
+
+The generator (`dwh/generate_ddl.py`) implements **Schema-Driven Development** for Data Vault 2.0:
+
+Running the generator:
+```bash
+python dwh/generate_ddl.py
+# Output: dwh/ddl/001_starrocks_dwh_detailed.sql
+```
+
+---
+
+## Universal DMP Class with YAML Configs
+
+### Processing Flow:
+1. **Kafka message arrives** → DMP identifies topic
+2. **Load topic config** from YAML
+3. **Route to appropriate method**:
+   - `_process_hub()` → Create Hub record
+   - `_process_link()` → Create Link record
+   - `_process_satellite()` → Create Satellite record with hash_diff
+4. **Insert to StarRocks** with proper hash keys
+
+
+### Key Features:
+- **No code changes** when adding new tables - just update YAML
+- **Automatic hash key generation** - MD5(business_key)
+- **Automatic hash_diff** - MD5(all attributes) for change detection
+- **Type coercion** - handles timestamps, dates, integers automatically
+- **Error handling** - logs warnings, continues processing
+
+---
+
+
+## Database Architecture
+
+The solution implements three logically separated databases:
+
+1. **user_service_db**:
+   - `users` - User profiles with SCD Type 2
+   - `user_addresses` - User addresses with versioning
+   - `user_status_history` - Status change tracking
+
+2. **order_service_db**:
+   - `orders` - Order headers with SCD Type 2
+   - `order_items` - Line items with product snapshots
+   - `order_status_history` - Status change tracking
+   - `products` - Product catalog with versioning
+
+3. **logistics_service_db**:
+   - `warehouses` - Warehouse information
+   - `pickup_points` - Pickup point locations
+   - `shipments` - Shipment tracking
+   - `shipment_movements` - Movement history
+   - `shipment_status_history` - Status changes
+
+**Source ER Diagram**: [`src_database_diagram.mmd`](src_database_diagram.mmd)
+
+---
+
+### DWH Database (StarRocks MPP)
+
+Data Vault 2.0 structure in `dwh_detailed` schema:
+
+**Hubs:**
+- `hub_users`, `hub_user_addresses`, `hub_products`, `hub_orders`
+- `hub_warehouses`, `hub_pickup_points`, `hub_shipments`
+
+**Links:**
+- `lnk_user_addresses_users`, `lnk_orders_users`, `lnk_orders_user_addresses`
+- `lnk_order_items`, `lnk_shipments_orders`, `lnk_shipments_warehouses`
+- `lnk_shipments_pickup_points`, `lnk_shipments_user_addresses`
+
+**Satellites:**
+- Regular: `sat_users`, `sat_user_addresses`, `sat_products`, `sat_orders`, etc.
+- History: `sat_user_status_history`, `sat_order_status_history`, `sat_shipment_movements`, etc.
+
+**DWH ER Diagram**: [`dwh_detailed_diagram.mmd`](dwh_detailed_diagram.mmd)
+
+Check existing tables:
+```bash
+docker exec -it postgres-master psql -U postgres -d user_service_db -c "\dt"
+docker exec -it starrocks mysql -h 127.0.0.1 -P 9030 -u root -D dwh_detailed -e "SHOW TABLES;"
+```
 
 ---
 
@@ -84,6 +228,15 @@ The generator (`dwh_generator/generate_ddl.py`) works on the principle of "Schem
 ✅ **Step 4**: Health monitoring setup.  
 ✅ **Step 5**: PostgreSQL replication setup.  
 ✅ **Step 6**: Implemented Cohort Analysis.  
+✅ **Step 7**: DDL for detailed DWH layer.  
+✅ **Step 8**: DWH ER Diagram.  
+✅ **Step 9**: DWH instance initialized - StarRocks container  
+✅ **Step 10**: Debezium connected - 3 connectors registered and working  
+✅ **Step 11**: DMP service working  
+✅ **Step 12**: DDL Generator  
+✅ **Step 13**: MPP Database - StarRocks instead of PostgreSQL  
+✅ **Step 14**: Universal DMP - Single class + YAML configs  
+✅ **Step 15**: E2E Tests for user service
 
 ---
 
@@ -92,28 +245,24 @@ The generator (`dwh_generator/generate_ddl.py`) works on the principle of "Schem
 hse-dwh/
 ├── cohort_analysis/
 │   ├── cohort_analysis_view.sql            # Cohort analysis view
-│   └── cohort_analysis.sql                 # Cohort analysis
+│   └── cohort_analysis.sql                 # Cohort analysis query
 ├── debezium/
-│   └── register-connectors.sh              # Idempotent connector registration for Debezium
+│   └── register-connectors.sh              # Idempotent connector registration
 ├── dmp/
-│   ├── venv/
-│   ├── config.yaml                         # Config for DMP Service
+│   ├── config.yaml                         # Universal DMP configuration
 │   ├── Dockerfile
-│   ├── main.py                             # DMP Service
+│   ├── main.py                             # Universal DMP service
 │   └── requirements.txt
 ├── docs/
-│   └── data_vault.md                       # Data Vault docs
+│   ├── data_vault.md                       # Data Vault documentation
+│   └── dwh_detailed_diagram.png            # DWH diagram
 ├── dwh/
-│   └── ddl/                                # Data Vault 2.0
-│       ├── 001_create_schema.sql           # Create DDL schema
-│       ├── 002_create_hubs.sql             # Create hubs 
-│       ├── 003_create_links.sql            # Create links
-│       └── 004_create_satellites.sql       # Create satellite
-├── dwh_generator/
-│   ├── generate_ddl.py                     # DDL generator for detailed DWH layer 
+│   ├── ddl/                                # Data Vault 2.0
+│   │   └── 001_starrocks_dwh_detailed.sql  # Generated DDL for StarRocks
+│   ├── generate_ddl.py                     # DDL code generator
 │   ├── requirements-generator.txt
 │   └── source_schema.yaml                  # Config for DDL
-├── init-script/                            # Replication initialization scripts
+├── init-script/                            # Replication initialization
 │   ├── bash/
 │   │   ├── 0001-create-replica-user.sh     # Create replication user
 │   │   ├── 0002-backup-master.sh           # Backup master database
@@ -128,15 +277,22 @@ hse-dwh/
 │   ├── 000_create_databases.sql            # Create three databases
 │   ├── 001_user_service_db.sql             # User service tables
 │   ├── 002_order_service_db.sql            # Order service tables
-│   ├── 003_logistics_service_db.sql        # Logistics service tables
-│   └── 004_dwh_detailed_ddl.sql            # DDL scripts for detailed DWH layer
+│   └── 003_logistics_service_db.sql        # Logistics service tables
+├── spark/  
+│   └── Dockerfile                          # Dockerfile for Spark
+├── tests/ 
+│   ├── data/                               # Data for tests
+│   │   └── user_sesrvice_users.csv         
+│   └── e2e/
+│       └── check_users.sh                  # E2E test for user service
 ├── .env.example                            # Environment variables template
 ├── .gitignore                              # Git exclusion rules
 ├── check_replication.sh                    # Replication status verification
-├── docker-compose.yml                      # Docker services definition
+├── docker-compose.yml                      # Full stack orchestration
 ├── docker-init.sh                          # Complete initialization script
 ├── README.md                               # Documentation
-└── src_database_diagram.mmd                # Database diagram source
+├── src_database_diagram.mmd                # Source databases ER diagram
+└── dwh_detailed_diagram.mmd                # DWH ER diagram
 ```
 
 ---
@@ -151,20 +307,33 @@ cd hse-dwh
 
 ### Quick Start
 
-Make the initialization script executable and run it:
+Clone the repository:
+```bash
+git clone https://github.com/vasyukov1/hse-dwh
+cd hse-dwh
+```
+
+Run the initialization script:
 ```bash
 chmod +x docker-init.sh
 ./docker-init.sh
 ```
 
 This script performs:
-1. Create .env if it doesn't exist
-2. Cleans up volumes
-3. Stops and removes existing containers
-4. Start master
-5. Prepare replica config
-6. Restart master
-7. Start replica
+1. Creates .env from .env.example
+2. Generates Data Vault 2.0 DDL from YAML config
+3. Cleans up old volumes
+4. Starts PostgreSQL master
+5. Creates service databases
+6. Creates replication user and publications
+7. Prepares replica configuration with pg_basebackup
+8. Starts PostgreSQL replica
+9. Starts StarRocks MPP and initializes DWH schema
+10. Starts Kafka broker
+11. Creates Debezium internal topics
+12. Starts Debezium Connect
+13. Registers CDC connectors
+14. Starts DMP service
 
 ### Manual Setup
 
@@ -208,6 +377,27 @@ This script performs:
 
 ---
 
+## Testing
+
+### End-to-End Tests
+
+The project includes automated tests to verify the entire pipeline:
+
+**Test 1: User Service Pipeline**
+```bash
+chmod +x tests/e2e/check_users.sh
+./tests/e2e/check_users.sh
+```
+
+This test:
+1. Inserts test users into `postgres-master`
+2. Verifies physical replication to `postgres-replica`
+3. Checks Kafka topic for CDC events
+4. Verifies Hub creation in StarRocks
+5. Verifies Satellite creation with attributes
+
+---
+
 ## Cohort Analysis
 
 Run cohort analysis and view results:
@@ -224,3 +414,13 @@ Watch cohort analysis results:
 ```bash
 docker exec postgres-master psql -U postgres -d order_service_db -c "SELECT * FROM cohort_analysis_view;"
 ```
+
+---
+
+## Resources
+
+- [Data Vault 2.0 Official](https://www.data-vault.co.uk/)
+- [StarRocks Documentation](https://docs.starrocks.io/)
+- [Debezium PostgreSQL Connector](https://debezium.io/documentation/reference/connectors/postgresql.html)
+- [HSE DWH Course Materials](https://github.com/mgcrp/hse_se_dwh_course_2025)
+
