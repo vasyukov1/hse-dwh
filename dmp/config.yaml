@@ -101,6 +101,8 @@ services:
             - "total_amount"
             - "currency"
             - "delivery_type"
+            - "expected_delivery_date"
+            - "actual_delivery_date"
             - "payment_method"
             - "payment_status"
         links:
@@ -134,6 +136,10 @@ services:
             - "product_name_snapshot"
             - "product_category_snapshot"
             - "product_brand_snapshot"
+            - "created_at"
+            - "updated_at"
+            - "created_by"
+            - "updated_by"
 
       - name: "order_service.public.order_status_history"
         history_satellite:
@@ -210,6 +216,11 @@ services:
             - "volume_cubic_cm"
             - "package_count"
             - "destination_type"
+            - "created_date"
+            - "dispatched_date"
+            - "estimated_delivery_date"
+            - "actual_delivery_date"
+            - "delivery_notes"
             - "recipient_name"
             - "delivery_signature"
         links:

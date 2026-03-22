@@ -6,414 +6,375 @@ Author: Alexander Vasyukov.
 
 ## Overview
 
-This project sets up a foundational DWH environment with PostgreSQL, including logical separation of three microservices:
-- **user_service_db** - User information
-- **order_service_db** - Order information  
-- **logistics_service_db** - Shipment and logistics information
+This project sets up a complete DWH environment including:
+- **user_service_db** — User information and addresses
+- **order_service_db** — Order and product information
+- **logistics_service_db** — Shipment and logistics information
 
-All databases reside on a single PostgreSQL instance with schema separation.
+All databases reside on a single PostgreSQL master with streaming replication to a replica.
+CDC is handled by Debezium → Kafka → DMP (Python) → StarRocks MPP (Data Vault 2.0).
+Presentation layer is built via Apache Airflow DAGs and visualised in Metabase.
 
-The solution includes a master-replica setup with automatic initialization and replication configuration. The code is taken from [seminar](https://github.com/mgcrp/hse_se_dwh_course_2025/tree/master/week02/sem/demo2_automated_replication).
+For the mart `dm_purchase_analytics`, the course clarification is:
+- `supplier_id` and `supplier_name` are derived from product `brand`
+- in this homework, `supplier = brand`
 
-Implemented 6-month customer cohort analysis tracking retention rates, total revenue, and average revenue per customer from their first purchase month.
-
----
-
-**Main Requirements:**
-- **Architecture Selection & DDL**: Data Vault 2.0 architecture with full DDL
-  - DDL file: [`dwh/ddl/001_starrocks_dwh_detailed.sql`](dwh/ddl/001_starrocks_dwh_detailed.sql)
-  - ER Diagram: [`dwh_detailed_diagram.mmd`](dwh_detailed_diagram.mmd)
-  - Architecture docs: [`docs/data_vault.md`](docs/data_vault.md)
- 
-- **Debezium Integration**: Full CDC setup with Kafka
-  - Connector registration: [`debezium/register-connectors.sh`](debezium/register-connectors.sh)
-  - 3 connectors: user_service, order_service, logistics_service
-  
-- **DMP Service**: Python service for data processing
-  - Service code: [`dmp/main.py`](dmp/main.py)
-  - Configuration: [`dmp/config.yaml`](dmp/config.yaml)
-
-- **DDL Code Generator**: YAML-driven DDL generation
-  - Generator: [`dwh/generate_ddl.py`](dwh/generate_ddl.py)
-  - Config: [`dwh/source_schema.yaml`](dwh/source_schema.yaml)
-  
-- **MPP Database**: StarRocks instead of PostgreSQL
-  - Auto-generated DDL optimized for MPP
+This mapping is implemented both in the StarRocks-based build and in the PostgreSQL fallback path inside [`airflow/dags/dwh_refresh.py`](/Users/alexvasyukov/Documents/GitHub/hse-dwh/airflow/dags/dwh_refresh.py).
 
 ---
 
-## Architecture
+## Quick Start
 
-This project implements a complete data warehouse solution with:
-- **Source Systems**: 3 microservice databases (PostgreSQL)
-- **CDC Layer**: Debezium + Kafka
-- **DWH Layer**: StarRocks MPP with Data Vault 2.0
-- **Orchestration**: Docker Compose
-
-### Source Microservices:
-1. **user_service_db** - User information and addresses
-2. **order_service_db** - Orders, products, and order items  
-3. **logistics_service_db** - Shipments, warehouses, and movements
-
-Check existing of tables:
 ```bash
-docker exec -it postgres-master psql -U <postgres_user> -d <db_name> -c "\dt"
+git clone https://github.com/vasyukov1/hse-dwh
+cd hse-dwh
+
+chmod +x docker-init.sh
+./docker-init.sh
 ```
 
----
-
-## Data Vault 2.0
-
-**Decision rationale:**
-
-1. **Microservices Architecture Fit**: Data Vault 2.0 naturally handles data from multiple source systems with different business keys and relationships. Each microservice becomes a separate `record_source`.
-
-2. **Historicity & Auditability**: 
-   - **Hubs** store immutable business keys
-   - **Satellites** track attribute changes with `load_dt` and `hash_diff`
-   - **Links** capture evolving relationships between entities
-   - Perfect for tracking order status changes, user profile updates, shipment movements
-
-3. **Incremental Loading**: 
-   - Insert-only pattern (no updates/deletes in Hubs/Links)
-   - Efficient CDC processing from Debezium
-   - Easy to parallelize across multiple entities
-
-4. **Schema Flexibility**:
-   - Easy to add new sources without restructuring
-   - Satellites can be added/modified independently
-   - Links support many-to-many relationships naturally
-
-5. **Cross-Database References**: 
-   - Orders reference users from another database
-   - Shipments reference addresses and orders from other systems
-   - Data Vault handles this through business keys and Links
+This single command:
+1. Creates `.env` from `.env.example`
+2. Generates the StarRocks Data Vault DDL from YAML
+3. Starts PostgreSQL master + replica
+4. Applies all schema migrations and creates Debezium publications
+5. Starts StarRocks MPP and initialises both `dwh_detailed` and `presentation` schemas
+6. Starts Kafka, Debezium Connect, and registers 3 CDC connectors
+7. Starts the DMP service (Kafka → StarRocks loader)
+8. Initialises and starts Apache Airflow (scheduler + webserver)
+9. Starts Metabase BI
 
 ---
 
-## StarRocks MPP
+## Loading Test Data
 
-**Decision rationale:**
-
-1. **True MPP Architecture**: 
-   - Distributed query execution across BE nodes
-   - Scales horizontally for large datasets
-   - Much faster than single-node PostgreSQL for OLAP
-
-2. **Data Vault Optimization**:
-   - Efficient JOIN performance (unlike ClickHouse)
-   - Supports complex multi-table queries needed for Data Vault
-   - UNIQUE KEY tables for Hubs/Links (de-duplication)
-   - DUPLICATE KEY tables for Satellites (append-only)
-
-3. **MySQL Protocol Compatibility**:
-   - Easy integration with existing tools
-   - Simple Python connectivity via `pymysql`
-   - No need for specialized drivers
-
-4. **Real-time Ingestion**:
-   - Sub-second INSERT latency
-   - Perfect for streaming CDC from Kafka
-   - No need for batch processing
-
-5. **Storage Efficiency**:
-   - Columnar storage reduces disk usage
-   - Built-in compression
-   - Automatic data compaction
-
----
-
-## DDL Code Generator
-
-**Principle of operation:**
-
-The generator (`dwh/generate_ddl.py`) implements **Schema-Driven Development** for Data Vault 2.0:
-
-Running the generator:
 ```bash
-python dwh/generate_ddl.py
-# Output: dwh/ddl/001_starrocks_dwh_detailed.sql
+chmod +x load_test_data.sh
+./load_test_data.sh
 ```
 
----
+The script loads all 12 CSV files in the correct FK-dependency order:
 
-## Universal DMP Class with YAML Configs
+| Database | Table | File |
+|---|---|---|
+| user_service_db | users | `user_service_users.csv` |
+| user_service_db | user_addresses | `user_service_user_addresses.csv` |
+| user_service_db | user_status_history | `user_service_user_status_history.csv` |
+| order_service_db | products | `order_service_products.csv` |
+| order_service_db | orders | `order_service_orders.csv` |
+| order_service_db | order_items | `order_service_order_items.csv` |
+| order_service_db | order_status_history | `order_service_order_status_history.csv` |
+| logistics_service_db | warehouses | `logistics_service_warehouses.csv` |
+| logistics_service_db | pickup_points | `logistics_service_pickup_points.csv` |
+| logistics_service_db | shipments | `logistics_service_shipments.csv` |
+| logistics_service_db | shipment_movements | `logistics_service_shipment_movements.csv` |
+| logistics_service_db | shipment_status_history | `logistics_service_shipment_status_history.csv` |
 
-### Processing Flow:
-1. **Kafka message arrives** → DMP identifies topic
-2. **Load topic config** from YAML
-3. **Route to appropriate method**:
-   - `_process_hub()` → Create Hub record
-   - `_process_link()` → Create Link record
-   - `_process_satellite()` → Create Satellite record with hash_diff
-4. **Insert to StarRocks** with proper hash keys
-
-
-### Key Features:
-- **No code changes** when adding new tables - just update YAML
-- **Automatic hash key generation** - MD5(business_key)
-- **Automatic hash_diff** - MD5(all attributes) for change detection
-- **Type coercion** - handles timestamps, dates, integers automatically
-- **Error handling** - logs warnings, continues processing
+After loading, the script waits until the CDC pipeline catches up or until the timeout is reached, then prints row counts in both PostgreSQL and StarRocks. If the detailed layer is still catching up, the presentation DAGs can still be run because they fall back to PostgreSQL source tables.
 
 ---
 
+## Triggering Airflow DAGs
 
-## Database Architecture
+After data is loaded, run the presentation-layer DAGs on business dates that exist in the source data:
 
-The solution implements three logically separated databases:
-
-1. **user_service_db**:
-   - `users` - User profiles with SCD Type 2
-   - `user_addresses` - User addresses with versioning
-   - `user_status_history` - Status change tracking
-
-2. **order_service_db**:
-   - `orders` - Order headers with SCD Type 2
-   - `order_items` - Line items with product snapshots
-   - `order_status_history` - Status change tracking
-   - `products` - Product catalog with versioning
-
-3. **logistics_service_db**:
-   - `warehouses` - Warehouse information
-   - `pickup_points` - Pickup point locations
-   - `shipments` - Shipment tracking
-   - `shipment_movements` - Movement history
-   - `shipment_status_history` - Status changes
-
-**Source ER Diagram**: [`src_database_diagram.mmd`](src_database_diagram.mmd)
-
----
-
-### DWH Database (StarRocks MPP)
-
-Data Vault 2.0 structure in `dwh_detailed` schema:
-
-**Hubs:**
-- `hub_users`, `hub_user_addresses`, `hub_products`, `hub_orders`
-- `hub_warehouses`, `hub_pickup_points`, `hub_shipments`
-
-**Links:**
-- `lnk_user_addresses_users`, `lnk_orders_users`, `lnk_orders_user_addresses`
-- `lnk_order_items`, `lnk_shipments_orders`, `lnk_shipments_warehouses`
-- `lnk_shipments_pickup_points`, `lnk_shipments_user_addresses`
-
-**Satellites:**
-- Regular: `sat_users`, `sat_user_addresses`, `sat_products`, `sat_orders`, etc.
-- History: `sat_user_status_history`, `sat_order_status_history`, `sat_shipment_movements`, etc.
-
-**DWH ER Diagram**: [`dwh_detailed_diagram.mmd`](dwh_detailed_diagram.mmd)
-
-Check existing tables:
 ```bash
-docker exec -it postgres-master psql -U postgres -d user_service_db -c "\dt"
-docker exec -it starrocks mysql -h 127.0.0.1 -P 9030 -u root -D dwh_detailed -e "SHOW TABLES;"
+chmod +x reinit_and_trigger.sh
+./reinit_and_trigger.sh
+
+docker exec airflow-scheduler airflow dags test dm_purchase_analytics 2025-10-08
+docker exec airflow-scheduler airflow dags test dm_warehouse_delivery 2025-10-09
 ```
+
+Or via the Airflow UI at **http://localhost:8080** (admin / admin).
+
+`reinit_and_trigger.sh` now:
+1. recreates `presentation` tables
+2. waits for `dwh_detailed` to catch up for up to `WAIT_FOR_DWH_SEC` seconds
+3. runs both marts on real business dates from the loaded CSVs
+4. if `dwh_detailed` is still behind, the DAGs automatically fall back to source PostgreSQL
+
+This matters for local verification because `dm_purchase_analytics` can contain many aggregated rows, and a too-early run previously looked like a hang even though the DAG was still inserting data.
+
+## Recommended Run Order
+
+For the homework demo, use this exact order:
+
+```bash
+./docker-init.sh
+./load_test_data.sh
+./reinit_and_trigger.sh
+./tests/e2e/check_presentation_layer.sh
+```
+
+Expected result:
+- `presentation.dm_purchase_analytics` is filled
+- `presentation.dm_warehouse_delivery` is filled
+- both tables are visible from Metabase after schema sync
+
+If `dm_warehouse_delivery` looks empty in Metabase but has rows in StarRocks, run **Admin → Databases → StarRocks DWH → Sync database schema now** in Metabase.
 
 ---
 
 ## Connection Strings
 
-- Master Node: `postgresql://postgres:postgres@localhost:5432/postgres`
-- Replica Node: `postgresql://postgres:postgres@localhost:5433/postgres`
-- User Service DB: `postgresql://postgres:postgres@localhost:5432/user_service_db`
-- Order Service DB: `postgresql://postgres:postgres@localhost:5432/order_service_db`
-- Logistics Service DB: `postgresql://postgres:postgres@localhost:5432/logistics_service_db`
----
-
-## Completed tasks
-✅ **Step 1**: Set up PostgreSQL instance in Docker Compose.  
-✅ **Step 2**: Automated database initialization.  
-✅ **Step 3**: Schema migration and tables creation.  
-✅ **Step 4**: Health monitoring setup.  
-✅ **Step 5**: PostgreSQL replication setup.  
-✅ **Step 6**: Implemented Cohort Analysis.  
-✅ **Step 7**: DDL for detailed DWH layer.  
-✅ **Step 8**: DWH ER Diagram.  
-✅ **Step 9**: DWH instance initialized - StarRocks container  
-✅ **Step 10**: Debezium connected - 3 connectors registered and working  
-✅ **Step 11**: DMP service working  
-✅ **Step 12**: DDL Generator  
-✅ **Step 13**: MPP Database - StarRocks instead of PostgreSQL  
-✅ **Step 14**: Universal DMP - Single class + YAML configs  
-✅ **Step 15**: E2E Tests for user service
+| Service | Connection |
+|---|---|
+| PostgreSQL Master | `postgresql://postgres:postgres@localhost:5432/postgres` |
+| PostgreSQL Replica | `postgresql://postgres:postgres@localhost:5433/postgres` |
+| user_service_db | `postgresql://postgres:postgres@localhost:5432/user_service_db` |
+| order_service_db | `postgresql://postgres:postgres@localhost:5432/order_service_db` |
+| logistics_service_db | `postgresql://postgres:postgres@localhost:5432/logistics_service_db` |
+| StarRocks SQL | `mysql -h 127.0.0.1 -P 9030 -u root -D presentation` |
+| Airflow | http://localhost:8080 (admin / admin) |
+| Metabase | http://localhost:3000 |
+| Debezium | http://localhost:8083 |
 
 ---
 
-## Project Structure
+## Architecture
+
 ```
-hse-dwh/
-├── cohort_analysis/
-│   ├── cohort_analysis_view.sql            # Cohort analysis view
-│   └── cohort_analysis.sql                 # Cohort analysis query
-├── debezium/
-│   └── register-connectors.sh              # Idempotent connector registration
-├── dmp/
-│   ├── config.yaml                         # Universal DMP configuration
-│   ├── Dockerfile
-│   ├── main.py                             # Universal DMP service
-│   └── requirements.txt
-├── docs/
-│   ├── data_vault.md                       # Data Vault documentation
-│   └── dwh_detailed_diagram.png            # DWH diagram
-├── dwh/
-│   ├── ddl/                                # Data Vault 2.0
-│   │   └── 001_starrocks_dwh_detailed.sql  # Generated DDL for StarRocks
-│   ├── generate_ddl.py                     # DDL code generator
-│   ├── requirements-generator.txt
-│   └── source_schema.yaml                  # Config for DDL
-├── init-script/                            # Replication initialization
-│   ├── bash/
-│   │   ├── 0001-create-replica-user.sh     # Create replication user
-│   │   ├── 0002-backup-master.sh           # Backup master database
-│   │   └── 0003-init-slave.sh              # Initialize replica from backup
-│   ├── common-config/
-│   │   ├── pg_hba.conf                     # Host-based authentication
-│   │   └── postgrresql.conf                # Master configuration
-│   ├── replica-config/
-│   │   └── postgrresql.auto.conf           # Replica configuration
-│   └── init.sh                             # Main initialization script
-├── migrations/                             # Database schema migrations
-│   ├── 000_create_databases.sql            # Create three databases
-│   ├── 001_user_service_db.sql             # User service tables
-│   ├── 002_order_service_db.sql            # Order service tables
-│   └── 003_logistics_service_db.sql        # Logistics service tables
-├── spark/  
-│   └── Dockerfile                          # Dockerfile for Spark
-├── tests/ 
-│   ├── data/                               # Data for tests
-│   │   └── user_sesrvice_users.csv         
-│   └── e2e/
-│       └── check_users.sh                  # E2E test for user service
-├── .env.example                            # Environment variables template
-├── .gitignore                              # Git exclusion rules
-├── check_replication.sh                    # Replication status verification
-├── docker-compose.yml                      # Full stack orchestration
-├── docker-init.sh                          # Complete initialization script
-├── README.md                               # Documentation
-├── src_database_diagram.mmd                # Source databases ER diagram
-└── dwh_detailed_diagram.mmd                # DWH ER diagram
+PostgreSQL Master ──► Debezium CDC ──► Kafka ──► DMP Service ──► StarRocks MPP
+       │                                                               │
+       ▼                                                               ▼
+PostgreSQL Replica                                            dwh_detailed (DV 2.0)
+                                                                       │
+                                                              Airflow DAGs
+                                                                       │
+                                                            presentation (CDM)
+                                                                       │
+                                                                  Metabase
 ```
+
+### Source Microservices
+Three PostgreSQL databases on a single instance, replicated to an async replica.
+Schema migrations live in `migrations/`.
+
+### CDC Layer
+Debezium PostgreSQL connector streams WAL changes → Kafka topics:
+- `user_service.public.*`
+- `order_service.public.*`
+- `logistics_service.public.*`
+
+### DWH Layer — Data Vault 2.0 (StarRocks `dwh_detailed`)
+Generated automatically from `dwh/source_schema.yaml` by `dwh/generate_ddl.py`.
+
+**Hubs:** `hub_users`, `hub_user_addresses`, `hub_products`, `hub_orders`, `hub_warehouses`, `hub_pickup_points`, `hub_shipments`
+
+**Links:** `lnk_user_addresses_users`, `lnk_orders_users`, `lnk_orders_user_addresses`, `lnk_order_items`, `lnk_shipments_orders`, `lnk_shipments_warehouses`, `lnk_shipments_pickup_points`, `lnk_shipments_user_addresses`
+
+**Satellites:** `sat_users`, `sat_user_addresses`, `sat_user_status_history`, `sat_products`, `sat_orders`, `sat_order_status_history`, `sat_order_items`, `sat_warehouses`, `sat_pickup_points`, `sat_shipments`, `sat_shipment_movements`, `sat_shipment_status_history`
+
+### Presentation Layer — CDM (StarRocks `presentation`)
+Built by Airflow DAGs from the DV 2.0 layer. If the detailed layer is still catching up, the DAGs automatically fall back to the PostgreSQL source tables on the replica, which is allowed by the HW3 statement and makes local verification deterministic.
+
+| Mart | Strategy | Schedule |
+|---|---|---|
+| `dm_purchase_analytics` | Full refresh (TRUNCATE + INSERT) | Daily 06:00 UTC |
+| `dm_warehouse_delivery` | Incremental (DELETE + INSERT for yesterday) | Daily 07:00 UTC |
+
+Semantics:
+- `dm_purchase_analytics`: purchase analytics by day and product, where supplier is represented by product brand
+- `dm_warehouse_delivery`: warehouse shipment analytics by shipment date
+
+### BI — Metabase
+Connect as MySQL: `host=starrocks, port=9030, user=root, db=presentation`.
+
+See `docs/metabase_setup.md` for step-by-step dashboard creation guide.
+
+## Dashboards And Screencast
+
+The homework requires not only built dashboards, but also a short screencast showing that they work.
+
+What must be prepared before recording:
+- run `./docker-init.sh`
+- load the CSVs with `./load_test_data.sh`
+- rebuild and fill marts with `./reinit_and_trigger.sh`
+- open Metabase and connect it to StarRocks as MySQL with `host=starrocks`, `port=9030`, `db=presentation`
+- ensure both tables `dm_purchase_analytics` and `dm_warehouse_delivery` are visible in Metabase
+- create two dashboards: purchases and warehouse delivery
+
+What to record:
+- architecture briefly: PostgreSQL → Debezium/Kafka/DMP → StarRocks → Airflow → Metabase
+- that both marts exist and contain data
+- dashboard 1 for purchases
+- dashboard 2 for warehouse delivery
+- a few interactions: open charts, filters, drill into numbers
+
+[Screencast](docs/screencast.mp4)
 
 ---
 
-## How to Run
+## Data Vault 2.0 — Design Decisions
 
-Clone this repository:
+1. **Microservices fit** — each service becomes a distinct `record_source`; business keys cross service boundaries via Links
+2. **Insert-only** — Hubs and Links never update, making CDC simple and idempotent
+3. **Historicity** — Satellites capture every change via `hash_diff`; full audit trail
+4. **Schema flexibility** — add new tables or services by editing `source_schema.yaml` and re-running `generate_ddl.py`
+
+---
+
+## StarRocks MPP — Design Decisions
+
+- **UNIQUE KEY** tables for Hubs & Links (de-duplication on upsert)
+- **DUPLICATE KEY** tables for Satellites (append-only history)
+- MySQL-protocol compatibility → `pymysql` client, works in Metabase as a MySQL source
+- Columnar storage + built-in compression for OLAP performance
+
+---
+
+## DDL Code Generator
+
 ```bash
-git clone https://github.com/vasyukov1/hse-dwh
-cd hse-dwh
+python dwh/generate_ddl.py
+# Output: dwh/ddl/001_starrocks_dwh_detailed.sql
 ```
 
-### Quick Start
-
-Clone the repository:
-```bash
-git clone https://github.com/vasyukov1/hse-dwh
-cd hse-dwh
-```
-
-Run the initialization script:
-```bash
-chmod +x docker-init.sh
-./docker-init.sh
-```
-
-This script performs:
-1. Creates .env from .env.example
-2. Generates Data Vault 2.0 DDL from YAML config
-3. Cleans up old volumes
-4. Starts PostgreSQL master
-5. Creates service databases
-6. Creates replication user and publications
-7. Prepares replica configuration with pg_basebackup
-8. Starts PostgreSQL replica
-9. Starts StarRocks MPP and initializes DWH schema
-10. Starts Kafka broker
-11. Creates Debezium internal topics
-12. Starts Debezium Connect
-13. Registers CDC connectors
-14. Starts DMP service
-
-### Manual Setup
-
-1. **Environment Setup**:
-    ```bash
-    cp .env.example .env
-    ```
-
-2. **Start Services**:
-    ```bash
-    docker compose up -d
-
-    chmod +x docker-init.sh
-    ./docker-init.sh
-    ```
-
-3. **Check if containers are running**:
-    ```bash
-    docker compose ps
-    ```
-
-4. **Check replication status**:
-    ```bash
-    chmod +x check_replication.sh
-    ./check_replication.sh
-    ```
-
-5. **Register Debezium Connectors**:
-    ```bash
-    chmod +x debezium/register-connectors.sh
-    ```
-
-6. **Test for DWH**:
-    ```bash
-    chmod +x tests/e2e/check_users.sh
-    chmod +x tests/e2e/check_logistics.sh
-
-    ./tests/e2e/check_users.sh
-    ./tests/e2e/check_logistics.sh
-    ```
+Driven by `dwh/source_schema.yaml`. Re-run whenever the source schema changes.
 
 ---
 
 ## Testing
 
-### End-to-End Tests
+### Replication check
+```bash
+chmod +x check_replication.sh
+./check_replication.sh
+```
 
-The project includes automated tests to verify the entire pipeline:
-
-**Test 1: User Service Pipeline**
+### End-to-end test (user service)
 ```bash
 chmod +x tests/e2e/check_users.sh
 ./tests/e2e/check_users.sh
 ```
 
-This test:
-1. Inserts test users into `postgres-master`
-2. Verifies physical replication to `postgres-replica`
-3. Checks Kafka topic for CDC events
-4. Verifies Hub creation in StarRocks
-5. Verifies Satellite creation with attributes
+### Presentation layer check
+```bash
+chmod +x tests/e2e/check_presentation_layer.sh
+./tests/e2e/check_presentation_layer.sh
+```
 
 ---
 
 ## Cohort Analysis
 
-Run cohort analysis and view results:
 ```bash
-docker exec -i postgres-master psql -U postgres -d order_service_db < cohort_analysis/cohort_analysis.sql
+# Create and run the cohort analysis view
+docker exec -i postgres-master psql -U postgres -d order_service_db \
+    < cohort_analysis/cohort_analysis.sql
+
+docker exec -i postgres-master psql -U postgres -d order_service_db \
+    < cohort_analysis/cohort_analysis_view.sql
+
+# View results
+docker exec postgres-master psql -U postgres -d order_service_db \
+    -c "SELECT * FROM cohort_analysis_view;"
 ```
 
-Run cohort analysis view:
-```bash
-docker exec -i postgres-master psql -U postgres -d order_service_db < cohort_analysis/cohort_analysis_view.sql
+---
+
+## Project Structure
+
+```
+hse-dwh/
+├── airflow/
+│   ├── dags/
+│   │   └── dwh_refresh.py               # ← Both DAGs: dm_purchase_analytics + dm_warehouse_delivery
+│   └── Dockerfile                       # Airflow + pymysql
+├── cohort_analysis/
+│   ├── cohort_analysis_view.sql
+│   └── cohort_analysis.sql
+├── debezium/
+│   └── register-connectors.sh           # Idempotent connector registration
+├── dmp/
+│   ├── config.yaml                      # Universal DMP configuration (YAML-driven)
+│   ├── Dockerfile
+│   ├── main.py                          # Universal DMP service (Hub/Link/Satellite router)
+│   └── requirements.txt
+├── docs/
+│   ├── data_vault.md                    # Data Vault structure docs
+│   ├── metabase_setup.md                # Metabase dashboard setup guide
+│   └── screencast_checklist.md          # What exactly to record for HW submission
+├── dwh/
+│   ├── ddl/
+│   │   ├── 001_starrocks_dwh_detailed.sql   # Auto-generated DV 2.0 DDL
+│   │   └── 002_starrocks_presentation.sql   # Presentation layer DDL (CDM)
+│   ├── generate_ddl.py                  # DDL code generator
+│   ├── requirements-generator.txt
+│   └── source_schema.yaml               # Source schema config
+├── init-script/                         # PostgreSQL replication setup
+│   ├── bash/
+│   │   ├── 0001-create-replica-user.sh
+│   │   ├── 0002-backup-master.sh
+│   │   └── 0003-init-slave.sh
+│   ├── common-config/
+│   │   ├── pg_hba.conf
+│   │   └── postgresql.conf
+│   ├── replica-config/
+│   │   └── postgresql.auto.conf
+│   └── init.sh
+├── migrations/                          # Source DB schema migrations
+│   ├── 000_create_databases.sql
+│   ├── 001_user_service_db.sql
+│   ├── 002_order_service_db.sql
+│   └── 003_logistics_service_db.sql
+├── test_data/                           # CSV test data (gitignored)
+│   ├── user_service_users.csv
+│   ├── user_service_user_addresses.csv
+│   ├── user_service_user_status_history.csv
+│   ├── order_service_products.csv
+│   ├── order_service_orders.csv
+│   ├── order_service_order_items.csv
+│   ├── order_service_order_status_history.csv
+│   ├── logistics_service_warehouses.csv
+│   ├── logistics_service_pickup_points.csv
+│   ├── logistics_service_shipments.csv
+│   ├── logistics_service_shipment_movements.csv
+│   └── logistics_service_shipment_status_history.csv
+├── tests/
+│   ├── data/
+│   │   └── uesr_service_users.csv       # Small sample for e2e tests
+│   └── e2e/
+│       ├── check_users.sh
+│       └── check_presentation_layer.sh
+├── .env.example
+├── .gitignore
+├── check_replication.sh
+├── docker-compose.yml
+├── docker-init.sh                       # One-command full stack setup
+├── load_test_data.sh                    # Load all 12 CSVs in correct FK order
+├── reinit_and_trigger.sh                # Recreate presentation tables + run DAGs on detected business dates
+├── README.md
+├── dwh_detailed_diagram.mmd             # DWH ER diagram
+└── src_database_diagram.mmd             # Source databases ER diagram
 ```
 
-Watch cohort analysis results:
-```bash
-docker exec postgres-master psql -U postgres -d order_service_db -c "SELECT * FROM cohort_analysis_view;"
-```
+---
+
+## Completed Tasks
+
+✅ **Step 1**: PostgreSQL master + Docker Compose  
+✅ **Step 2**: Automated DB initialisation  
+✅ **Step 3**: Schema migrations and table creation  
+✅ **Step 4**: Health monitoring  
+✅ **Step 5**: PostgreSQL master → replica replication  
+✅ **Step 6**: 6-month customer cohort analysis  
+✅ **Step 7**: Data Vault 2.0 DDL for detailed DWH layer  
+✅ **Step 8**: DWH ER diagram  
+✅ **Step 9**: StarRocks MPP container  
+✅ **Step 10**: Debezium CDC — 3 connectors registered  
+✅ **Step 11**: Universal DMP service (Kafka → StarRocks)  
+✅ **Step 12**: YAML-driven DDL generator  
+✅ **Step 13**: StarRocks as MPP analytical database  
+✅ **Step 14**: Universal DMP — single class + YAML config  
+✅ **Step 15**: E2E tests for user service  
+✅ **Step 16**: Apache Airflow in Docker Compose  
+✅ **Step 17**: DAG — Витрина 1: `dm_purchase_analytics` (full refresh daily)  
+✅ **Step 18**: DAG — Витрина 2: `dm_warehouse_delivery` (incremental daily)  
+✅ **Step 19**: Metabase BI with 2 dashboards (purchases + warehouses)  
+✅ **Step 20**: Presentation layer DDL (`002_starrocks_presentation.sql`)  
+✅ **Step 21**: Clean unified test data loader (`load_test_data.sh`) for all 12 CSVs
 
 ---
 
@@ -423,4 +384,3 @@ docker exec postgres-master psql -U postgres -d order_service_db -c "SELECT * FR
 - [StarRocks Documentation](https://docs.starrocks.io/)
 - [Debezium PostgreSQL Connector](https://debezium.io/documentation/reference/connectors/postgresql.html)
 - [HSE DWH Course Materials](https://github.com/mgcrp/hse_se_dwh_course_2025)
-
