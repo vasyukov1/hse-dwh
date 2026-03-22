@@ -202,7 +202,7 @@ What to record:
 - dashboard 2 for warehouse delivery
 - a few interactions: open charts, filters, drill into numbers
 
-[Screencast](docs/screencast)
+[Screencast](docs/screencast.mp4)
 
 ---
 
