@@ -19,6 +19,3 @@ postgres-data/
 postgres-master-data/
 postgres-replica-data/
 starrocks-data/
-
-# Test data
-test_data/
