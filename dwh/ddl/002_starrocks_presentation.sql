@@ -14,8 +14,8 @@ DROP TABLE IF EXISTS dm_purchase_analytics;
 
 CREATE TABLE IF NOT EXISTS dm_purchase_analytics (
     purchase_date           DATE            NOT NULL,
-    product_id              BIGINT          NOT NULL,
-    supplier_id             BIGINT          NOT NULL,
+    product_id              INT             NOT NULL,
+    supplier_id             INT             NOT NULL,
     product_name            VARCHAR(500),
     category                VARCHAR(500),
     supplier_name           VARCHAR(500),
@@ -36,13 +36,13 @@ DROP TABLE IF EXISTS dm_warehouse_delivery;
 
 CREATE TABLE IF NOT EXISTS dm_warehouse_delivery (
     shipment_date           DATE            NOT NULL,
-    warehouse_id            BIGINT          NOT NULL,
+    warehouse_id            INT             NOT NULL,
     warehouse_name          VARCHAR(500),
-    order_count             INT             NOT NULL DEFAULT 0,
+    order_count             INT             NOT NULL,
     total_shipment_qty      DECIMAL(18,2),
     avg_processing_time_min DECIMAL(18,2),
-    delayed_orders_count    INT             NOT NULL DEFAULT 0,
-    unique_customers_count  INT             NOT NULL DEFAULT 0,
+    delayed_orders_count    INT             NOT NULL,
+    unique_customers_count  INT             NOT NULL,
     load_dt                 DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) UNIQUE KEY(shipment_date, warehouse_id)
 COMMENT 'Витрина 2: Доставка по складам'

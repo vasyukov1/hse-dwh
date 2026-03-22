@@ -23,7 +23,11 @@ Go to **Settings → Admin → Databases → Add database**:
 | Username      | root          |
 | Password      | (leave empty) |
 
-Click **Save**. Metabase will sync the tables automatically.
+Click Save. Metabase will sync the tables automatically.
+
+If one of the marts was rebuilt after the first connection and does not appear or looks empty in the UI, run:
+- **Admin → Databases → StarRocks DWH → Sync database schema now**
+- **Admin → Databases → StarRocks DWH → Re-scan field values now**
 
 ---
 
@@ -90,7 +94,7 @@ Visualization: Bar chart (vertical = column)
 
 ---
 
-## 4. Dashboard 2: Аналитика по складам
+## 4. Dashboard 2: Доставка по складам
 
 **Create → New Dashboard → "Доставка по складам"**
 
@@ -159,11 +163,3 @@ ORDER BY customers DESC
 LIMIT 5
 ```
 Visualization: Bar chart
-
----
-
-## 5. Tips
-
-- After adding charts to a dashboard, use **Edit dashboard** to resize/arrange
-- Add **date range filters** to dashboards via Dashboard → Edit → Add filter
-- Use **Auto-refresh** (top right) to keep dashboards live

@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 echo "=================================================================="
 echo "  E2E Test: Presentation Layer (CDM) Verification"
@@ -27,20 +27,26 @@ echo "$TABLES" | grep -q "dm_warehouse_delivery" \
     && echo "✅ Table dm_warehouse_delivery exists" \
     || { echo "❌ dm_warehouse_delivery NOT found"; exit 1; }
 
+LATEST_PURCHASE_DATE=$(docker exec -i postgres-master psql -U postgres -d order_service_db -tAc \
+    "SELECT MAX(DATE(order_date))::text FROM orders WHERE order_date IS NOT NULL;")
+LATEST_DELIVERY_DATE=$(docker exec -i postgres-master psql -U postgres -d logistics_service_db -tAc \
+    "SELECT MAX(DATE(dispatched_date))::text FROM shipments WHERE dispatched_date IS NOT NULL;")
+DELIVERY_LOGICAL_DATE=$(python3 - "$LATEST_DELIVERY_DATE" <<'PY'
+from datetime import date, timedelta
+import sys
+print((date.fromisoformat(sys.argv[1]) + timedelta(days=1)).isoformat())
+PY
+)
 
-# ── 2. Manually trigger DAGs via Airflow CLI ──────────
+# ── 2. Run DAGs on real business dates via Airflow CLI ────────
 echo ""
-echo "▶ STEP 2: Triggering Airflow DAGs manually"
-docker exec -i airflow-scheduler airflow dags trigger dm_purchase_analytics \
-    && echo "✅ dm_purchase_analytics triggered" \
-    || echo "⚠️ WARNING: Could not trigger dm_purchase_analytics (may already be running)"
+echo "▶ STEP 2: Running Airflow DAGs via airflow dags test"
+echo "  Purchase logical date: $LATEST_PURCHASE_DATE"
+echo "  Delivery business date: $LATEST_DELIVERY_DATE"
+echo "  Delivery logical date: $DELIVERY_LOGICAL_DATE"
 
-docker exec -i airflow-scheduler airflow dags trigger dm_warehouse_delivery \
-    && echo "✅ dm_warehouse_delivery triggered" \
-    || echo "⚠️ WARNING: Could not trigger dm_warehouse_delivery"
-
-echo "  Waiting 30s for DAGs to finish..."
-sleep 30
+docker exec -i airflow-scheduler airflow dags test dm_purchase_analytics "$LATEST_PURCHASE_DATE"
+docker exec -i airflow-scheduler airflow dags test dm_warehouse_delivery "$DELIVERY_LOGICAL_DATE"
 
 
 # ── 3. Check mart 1 ───────────────────────────────────
@@ -71,7 +77,7 @@ fi
 # ── 4. Check mart 2 ───────────────────────────────────
 echo ""
 echo "▶ STEP 4: Checking dm_warehouse_delivery"
-COUNT=$(sr_query "SELECT COUNT(*) FROM presentation.dm_warehouse_delivery;" | tail -n1 | tr -d ' ')
+COUNT=$(sr_query "SELECT COUNT(*) FROM presentation.dm_warehouse_delivery WHERE shipment_date = '${LATEST_DELIVERY_DATE}';" | tail -n1 | tr -d ' ')
 echo "  Rows in dm_warehouse_delivery: $COUNT"
 if [ "$COUNT" -gt "0" ]; then
     echo "✅ dm_warehouse_delivery has data!"
@@ -85,7 +91,8 @@ if [ "$COUNT" -gt "0" ]; then
             delayed_orders_count,
             unique_customers_count
         FROM presentation.dm_warehouse_delivery
-        ORDER BY shipment_date DESC
+        WHERE shipment_date = '${LATEST_DELIVERY_DATE}'
+        ORDER BY order_count DESC
         LIMIT 5;
     "
 else

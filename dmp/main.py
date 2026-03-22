@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from kafka import KafkaConsumer
+from kafka.errors import NoBrokersAvailable
 
 
 class DMPService:
@@ -13,25 +14,14 @@ class DMPService:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
-        db_host = os.getenv("DWH_HOST", 'starrocks')
-        db_port = int(os.getenv("DWH_PORT", '9030'))
-        db_name = os.getenv("DWH_DB", 'dwh_detailed')
-        db_user = os.getenv("DWH_USER", 'root')
-        db_pass = os.getenv("DWH_PASSWORD", '')
+        self.db_host = os.getenv("DWH_HOST", 'starrocks')
+        self.db_port = int(os.getenv("DWH_PORT", '9030'))
+        self.db_name = os.getenv("DWH_DB", 'dwh_detailed')
+        self.db_user = os.getenv("DWH_USER", 'root')
+        self.db_pass = os.getenv("DWH_PASSWORD", '')
 
-        print(f"Connecting to StarRocks DWH at {db_host}:{db_port}/{db_name}...")
-        while True:
-            try:
-                self.db_conn = pymysql.connect(
-                    host=db_host, port=db_port,
-                    database=db_name, user=db_user, password=db_pass,
-                    autocommit=True, connect_timeout=10, charset='utf8mb4'
-                )
-                print("Connected to StarRocks DWH!")
-                break
-            except pymysql.err.OperationalError as e:
-                print(f"StarRocks DWH not ready yet ({e}). Waiting 2 seconds...")
-                time.sleep(2)
+        self.db_conn = None
+        self._connect_db()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -41,6 +31,46 @@ class DMPService:
         if isinstance(data, dict):
             data = json.dumps(data, sort_keys=True)
         return hashlib.md5(str(data).encode()).hexdigest()
+
+    def _connect_db(self):
+        print(f"Connecting to StarRocks DWH at {self.db_host}:{self.db_port}/{self.db_name}...")
+        while True:
+            try:
+                self.db_conn = pymysql.connect(
+                    host=self.db_host,
+                    port=self.db_port,
+                    database=self.db_name,
+                    user=self.db_user,
+                    password=self.db_pass,
+                    autocommit=True,
+                    connect_timeout=10,
+                    charset='utf8mb4'
+                )
+                print("Connected to StarRocks DWH!")
+                return
+            except pymysql.err.OperationalError as e:
+                print(f"StarRocks DWH not ready yet ({e}). Waiting 2 seconds...")
+                time.sleep(2)
+
+    def _reconnect_db(self):
+        try:
+            if self.db_conn is not None:
+                self.db_conn.close()
+        except Exception:
+            pass
+        self._connect_db()
+
+    def _is_retryable_db_error(self, error: Exception) -> bool:
+        if isinstance(
+            error,
+            (
+                pymysql.err.OperationalError,
+                pymysql.err.InterfaceError,
+                pymysql.err.InternalError,
+            ),
+        ):
+            return True
+        return getattr(error, "args", None) == (0, '')
     
     def _coerce(self, val, attr_name):
         if isinstance(val, int):
@@ -53,8 +83,23 @@ class DMPService:
     def _insert(self, table: str, columns: list, values: tuple):
         cols = ', '.join(columns)
         placeholders = ', '.join(['%s'] * len(values))
-        cur = self.db_conn.cursor()
-        cur.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", values)
+        sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
+
+        for attempt in range(3):
+            try:
+                self.db_conn.ping(reconnect=True)
+                with self.db_conn.cursor() as cur:
+                    cur.execute(sql, values)
+                return
+            except Exception as e:
+                if attempt == 2 or not self._is_retryable_db_error(e):
+                    raise
+                print(
+                    f"Retryable StarRocks error on insert into {table} "
+                    f"(attempt {attempt + 1}/3): {type(e).__name__}: {e!r}"
+                )
+                time.sleep(1)
+                self._reconnect_db()
     
     # ------------------------------------------------------------------
     # Hub
@@ -87,7 +132,7 @@ class DMPService:
                 (link_hk, source_hk, target_hk, record_source)
             )
         except Exception as e:
-            print(f"Link [{cfg['table']}] warning: {e}")
+            print(f"Link [{cfg['table']}] warning: {type(e).__name__}: {e!r}")
 
     # ------------------------------------------------------------------
     # Satellite
@@ -124,7 +169,7 @@ class DMPService:
                     (link_hk, parent_hk, sec_hk, record_source)
                 )
             except Exception as e:
-                print(f"Link [{cfg['link_table']}] warning: {e}")
+                print(f"Link [{cfg['link_table']}] warning: {type(e).__name__}: {e!r}")
             hub_key_val = link_hk
 
         values = [self._coerce(data.get(a), a) for a in cfg['attributes']]
@@ -170,21 +215,33 @@ class DMPService:
             for topic in service['topics']:
                 topics.append(topic['name'])
                 topic_map[topic['name']] = topic
-        
-        consumer = KafkaConsumer(
-            *topics,
-            bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP", 'kafka:9092'),
-            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-            group_id='dmp-dwh-loader-v1',
-            auto_offset_reset='earliest'
-        )
+
+        kafka_bootstrap = os.getenv("KAFKA_BOOTSTRAP", 'kafka:9092')
+        consumer_group = os.getenv("DMP_CONSUMER_GROUP", 'dmp-dwh-loader-v2')
+        while True:
+            try:
+                consumer = KafkaConsumer(
+                    *topics,
+                    bootstrap_servers=kafka_bootstrap,
+                    value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+                    group_id=consumer_group,
+                    auto_offset_reset='earliest'
+                )
+                break
+            except NoBrokersAvailable:
+                print(
+                    f"Kafka is not ready at {kafka_bootstrap}. "
+                    "Waiting 5 seconds before retry..."
+                )
+                time.sleep(5)
 
         print(f"DMP Service started. Listening to: {topics}")
+        print(f"Kafka consumer group: {consumer_group}")
         for msg in consumer:
             try:
                 self.process_message(topic_map[msg.topic], msg.value)
             except Exception as e:
-                print(f"Error processing message from {msg.topic}: {e}")
+                print(f"Error processing message from {msg.topic}: {type(e).__name__}: {e!r}")
 
 
 if __name__ == "__main__":

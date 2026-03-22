@@ -118,6 +118,7 @@ services:
       - kafka
       - starrocks
       - debezium
+    restart: unless-stopped
     environment:
       PYTHONUNBUFFERED: "1"
       DWH_HOST: ${DWH_HOST}
@@ -126,6 +127,7 @@ services:
       DWH_USER: ${DWH_USER}
       DWH_PASSWORD: ${DWH_PASSWORD}
       KAFKA_BOOTSTRAP: kafka:9092
+      DMP_CONSUMER_GROUP: dmp-dwh-loader-v2
     networks:
       - postgres-network
 
@@ -144,6 +146,11 @@ services:
       STARROCKS_PORT: "9030"
       STARROCKS_USER: root
       STARROCKS_PASSWORD: ""
+      # PostgreSQL replica connection for source-table fallback
+      SRC_PG_HOST: postgres-replica
+      SRC_PG_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - airflow-logs:/opt/airflow/logs
