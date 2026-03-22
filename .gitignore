@@ -20,4 +20,3 @@ starrocks-data/
 
 # Test data
 test_data/
-load_test_data.sh

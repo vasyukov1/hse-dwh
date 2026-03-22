@@ -63,7 +63,7 @@ services:
       start_period: 60s
     networks:
       - postgres-network
- 
+
   kafka:
     container_name: kafka
     image: confluentinc/cp-kafka:7.7.0
@@ -129,7 +129,123 @@ services:
     networks:
       - postgres-network
 
+  x-airflow-common: &airflow-common
+    build: ./airflow
+    image: hse-dwh-airflow:local
+    environment: &airflow-common-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # Uses existing postgres-master to store Airflow metadata
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-master:5432/airflow_db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "change-me-in-production-please-32chars"
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "60"
+      # StarRocks connection for DAGs
+      STARROCKS_HOST: starrocks
+      STARROCKS_PORT: "9030"
+      STARROCKS_USER: root
+      STARROCKS_PASSWORD: ""
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+    networks:
+      - postgres-network
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        echo 'Creating airflow_db if not exists...'
+        PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql \
+          -h postgres-master \
+          -U "${POSTGRES_USER:-postgres}" \
+          -tc "SELECT 1 FROM pg_database WHERE datname='airflow_db'" \
+          | grep -q 1 \
+          || PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql \
+               -h postgres-master \
+               -U "${POSTGRES_USER:-postgres}" \
+               -c "CREATE DATABASE airflow_db"
+        echo 'Running airflow db migrate...'
+        airflow db migrate
+        echo 'Creating admin user...'
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          2>/dev/null || true
+        echo 'Airflow init complete!'
+    restart: "no"
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: always
+
+  metabase:
+    image: metabase/metabase:v0.49.6
+    container_name: metabase
+    ports:
+      - "${METABASE_PORT:-3000}:3000"
+    volumes:
+      - metabase-data:/metabase-data
+    environment:
+      MB_DB_TYPE: h2
+      MB_DB_FILE: /metabase-data/metabase.db
+      JAVA_OPTS: "-Xmx512m"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    restart: always
+    networks:
+      - postgres-network
+
 
 networks:
   postgres-network:
     driver: bridge
+
+volumes:
+  airflow-logs:
+  metabase-data:
